@@ -10,7 +10,7 @@ from fastapi import (
 )
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr
 from typing import Optional, List, Dict, Any
 import pandas as pd
 import numpy as np
@@ -20,16 +20,31 @@ from jose import JWTError, jwt
 from passlib.context import CryptContext
 import os
 import json
+import logging
+from sqlalchemy.orm import Session
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Import AnalysisEngine
 from .services.analysis_service import AnalysisEngine
 
-# Configuration (move to config.py in production)
-SECRET_KEY = "your-secret-key-here"  # Change this!
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 30
+# Import database models and functions
+from .core.database import get_db, engine, SessionLocal
+from .models.models import Base, User as UserModel
+from .crud import crud as user_crud
+from .schemas import schemas
 
-# Sample database (replace with real DB in production)
+# Configuration (move to config.py in production)
+SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-here")  # Change this!
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "30"))
+
+# Create tables if they don't exist yet
+Base.metadata.create_all(bind=engine)
+
+# Sample database (will be replaced with real DB below)
 fake_users_db = {
     "testuser": {
         "username": "testuser",
@@ -112,7 +127,9 @@ class VisualizationRequest(BaseModel):
 
 # Auth setup
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+oauth2_scheme = OAuth2PasswordBearer(
+    tokenUrl="auth/login"
+)  # Updated to match the new endpoint
 
 app = FastAPI(title="Business Insights API", version="0.1.0")
 
@@ -456,3 +473,111 @@ async def clear_cache(older_than_days: int = 1):
     Clear cached data and analyses
     """
     return analysis_engine.clear_cache(older_than_days)
+
+
+# Authentication routes
+@app.post("/auth/register", response_model=schemas.User, tags=["Authentication"])
+def register_user(user: schemas.UserCreate, db: Session = Depends(get_db)):
+    """
+    Register a new user in the database
+    """
+    print(f"Attempting to register user: {user.username}, email: {user.email}")
+
+    # Check if username already exists
+    db_user = user_crud.get_user_by_username(db, username=user.username)
+    if db_user:
+        print(f"Username {user.username} already exists")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Username already registered",
+        )
+
+    # Check if email already exists
+    db_user = user_crud.get_user_by_email(db, email=user.email)
+    if db_user:
+        print(f"Email {user.email} already exists")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Email already registered"
+        )
+
+    # Create the user
+    try:
+        new_user = user_crud.create_user(db=db, user=user)
+        print(f"Successfully created user: {new_user.username}")
+        return new_user
+    except Exception as e:
+        print(f"Error creating user: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to create user: {str(e)}",
+        )
+
+
+@app.post("/auth/login", response_model=schemas.Token, tags=["Authentication"])
+def login(
+    form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)
+):
+    """
+    Authenticate and login a user
+    """
+    # Try to get user from database
+    user = user_crud.get_user_by_username(db, username=form_data.username)
+    if not user or not user_crud.verify_password(
+        form_data.password, user.hashed_password
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect username or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    # Generate JWT token
+    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token = create_access_token(
+        data={"sub": user.username}, expires_delta=access_token_expires
+    )
+
+    return {"access_token": access_token, "token_type": "bearer", "user": user}
+
+
+@app.get("/auth/user", response_model=schemas.User, tags=["Authentication"])
+def get_current_user(
+    db: Session = Depends(get_db), token: str = Depends(oauth2_scheme)
+):
+    """
+    Get the current authenticated user
+    """
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+    try:
+        # Decode the JWT token
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        username: str = payload.get("sub")
+        if username is None:
+            raise credentials_exception
+    except JWTError:
+        raise credentials_exception
+
+    # Get user from database
+    user = user_crud.get_user_by_username(db, username=username)
+    if user is None:
+        raise credentials_exception
+
+    return user
+
+
+# Initialize default profiles
+@app.on_event("startup")
+def startup_event():
+    db = SessionLocal()
+    try:
+        user_crud.create_default_profiles(db)
+        logger.info("Default profiles created successfully")
+    except Exception as e:
+        logger.error(f"Error creating default profiles: {e}")
+    finally:
+        db.close()

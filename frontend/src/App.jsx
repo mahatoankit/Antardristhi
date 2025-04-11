@@ -1,35 +1,44 @@
-import { useState } from 'react'
-import reactLogo from './assets/react.svg'
-import viteLogo from '/vite.svg'
-import './App.css'
+import { useState, useEffect } from 'react';
+import { AuthProvider, useAuth } from './context/AuthContext';
+import { ChatProvider } from './context/ChatContext';
+import Login from './components/auth/Login';
+import Chat from './components/chat/Chat';
+import './App.css';
 
+// Main App component wrapper with providers
 function App() {
-  const [count, setCount] = useState(0)
-
   return (
-    <>
-      <div className=''>
-        <a href="https://vite.dev" target="_blank">
-          <img src={viteLogo} className="logo" alt="Vite logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
-      </div>
-      <h1>Vite + React</h1>
-      <div className="card">
-        <button onClick={() => setCount((count) => count + 1)}>
-          count is {count}
-        </button>
-        <p>
-          Edit <code>src/App.jsx</code> and save to test HMR
-        </p>
-      </div>
-      <p className="read-the-docs">
-        Click on the Vite and React logos to learn more
-      </p>
-    </>
-  )
+    <AuthProvider>
+      <ChatProvider>
+        <AppContent />
+      </ChatProvider>
+    </AuthProvider>
+  );
 }
 
-export default App
+// App content that uses the context
+function AppContent() {
+  const { isAuthenticated, loading } = useAuth();
+  const [appReady, setAppReady] = useState(false);
+
+  // Add a slight delay to prevent flash of login screen
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setAppReady(true);
+    }, 500);
+
+    return () => clearTimeout(timer);
+  }, []);
+
+  if (loading || !appReady) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-indigo-500"></div>
+      </div>
+    );
+  }
+
+  return isAuthenticated ? <Chat /> : <Login />;
+}
+
+export default App;
