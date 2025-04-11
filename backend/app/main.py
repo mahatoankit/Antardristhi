@@ -1,8 +1,17 @@
-from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, status
+from fastapi import (
+    FastAPI,
+    Depends,
+    HTTPException,
+    UploadFile,
+    File,
+    status,
+    Form,
+    Body,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 import pandas as pd
 import numpy as np
 import io
@@ -10,6 +19,10 @@ from datetime import datetime, timedelta
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 import os
+import json
+
+# Import AnalysisEngine
+from .services.analysis_service import AnalysisEngine
 
 # Configuration (move to config.py in production)
 SECRET_KEY = "your-secret-key-here"  # Change this!
@@ -28,13 +41,16 @@ fake_users_db = {
     }
 }
 
+
 # Models
 class Token(BaseModel):
     access_token: str
     token_type: str
 
+
 class TokenData(BaseModel):
     username: Optional[str] = None
+
 
 class User(BaseModel):
     username: str
@@ -43,18 +59,56 @@ class User(BaseModel):
     user_type: Optional[str] = None
     disabled: Optional[bool] = None
 
+
 class UserInDB(User):
     hashed_password: str
+
 
 class ChatMessage(BaseModel):
     content: str
     is_user: bool
     timestamp: datetime = datetime.now()
 
+
 class DataAnalysisResult(BaseModel):
     insight: str
     visualization: Optional[str] = None
     data: Optional[dict] = None
+
+
+# Initialize Analysis Engine
+analysis_engine = AnalysisEngine()
+
+
+# New models for ML-powered analysis
+class AnalysisRequest(BaseModel):
+    prompt: str
+    data_id: str
+
+
+class TimeSeriesRequest(BaseModel):
+    data_id: str
+    date_col: Optional[str] = None
+    value_col: Optional[str] = None
+    periods: Optional[int] = 30
+
+
+class ClusteringRequest(BaseModel):
+    data_id: str
+    features: Optional[List[str]] = None
+    n_clusters: Optional[int] = None
+
+
+class AnomalyDetectionRequest(BaseModel):
+    data_id: str
+    features: Optional[List[str]] = None
+    contamination: Optional[float] = 0.05
+
+
+class VisualizationRequest(BaseModel):
+    analysis_id: str
+    viz_type: str
+
 
 # Auth setup
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -71,17 +125,21 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 # Helper functions
 def verify_password(plain_password, hashed_password):
     return pwd_context.verify(plain_password, hashed_password)
 
+
 def get_password_hash(password):
     return pwd_context.hash(password)
+
 
 def get_user(db, username: str):
     if username in db:
         user_dict = db[username]
         return UserInDB(**user_dict)
+
 
 def authenticate_user(fake_db, username: str, password: str):
     user = get_user(fake_db, username)
@@ -90,6 +148,7 @@ def authenticate_user(fake_db, username: str, password: str):
     if not verify_password(password, user.hashed_password):
         return False
     return user
+
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     to_encode = data.copy()
@@ -100,6 +159,7 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     to_encode.update({"exp": expire})
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
+
 
 async def get_current_user(token: str = Depends(oauth2_scheme)):
     credentials_exception = HTTPException(
@@ -120,10 +180,12 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
         raise credentials_exception
     return user
 
+
 async def get_current_active_user(current_user: User = Depends(get_current_user)):
     if current_user.disabled:
         raise HTTPException(status_code=400, detail="Inactive user")
     return current_user
+
 
 # Basic data analysis functions
 def analyze_dataframe(df: pd.DataFrame, prompt: str) -> dict:
@@ -132,11 +194,11 @@ def analyze_dataframe(df: pd.DataFrame, prompt: str) -> dict:
         "columns": list(df.columns),
         "shape": df.shape,
         "missing_values": df.isnull().sum().to_dict(),
-        "sample_data": df.head().to_dict(orient='records')
+        "sample_data": df.head().to_dict(orient="records"),
     }
-    
+
     prompt = prompt.lower()
-    
+
     if "sales" in prompt and "trend" in prompt:
         if "date" in df.columns or "month" in df.columns:
             date_col = "date" if "date" in df.columns else "month"
@@ -144,22 +206,23 @@ def analyze_dataframe(df: pd.DataFrame, prompt: str) -> dict:
             analysis["visualization"] = "line_chart"
         else:
             analysis["insight"] = "No date column found for trend analysis"
-    
+
     elif "summary" in prompt or "overview" in prompt:
         analysis["insight"] = "Dataset summary"
         analysis["stats"] = df.describe().to_dict()
-    
+
     elif "customer" in prompt and "segment" in prompt:
         if "customer" in df.columns:
             analysis["insight"] = "Customer segmentation analysis"
             analysis["visualization"] = "pie_chart"
         else:
             analysis["insight"] = "No customer data found for segmentation"
-    
+
     else:
         analysis["insight"] = "Here are some basic insights about your data"
-    
+
     return analysis
+
 
 # Routes
 @app.post("/token", response_model=Token)
@@ -177,66 +240,113 @@ async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(
     )
     return {"access_token": access_token, "token_type": "bearer"}
 
+
 @app.get("/users/me/", response_model=User)
 async def read_users_me(current_user: User = Depends(get_current_active_user)):
     return current_user
 
+
 @app.post("/upload/")
 async def upload_data(
-    file: UploadFile = File(...),
-    current_user: User = Depends(get_current_active_user)
+    file: UploadFile = File(...), current_user: User = Depends(get_current_active_user)
 ):
     try:
         # Check file type
-        if file.filename.endswith('.csv'):
+        if file.filename.endswith(".csv"):
             contents = await file.read()
-            df = pd.read_csv(io.StringIO(contents.decode('utf-8')))
-        elif file.filename.endswith(('.xls', '.xlsx')):
+            df = pd.read_csv(io.StringIO(contents.decode("utf-8")))
+        elif file.filename.endswith((".xls", ".xlsx")):
             contents = await file.read()
             df = pd.read_excel(io.BytesIO(contents))
         else:
-            raise HTTPException(status_code=400, detail="Unsupported file type. Please upload CSV or Excel.")
-        
-        # Basic analysis
+            raise HTTPException(
+                status_code=400,
+                detail="Unsupported file type. Please upload CSV or Excel.",
+            )
+
+        # Preprocess data with ML engine
+        preprocessing_result = analysis_engine.preprocess_data(df)
+
+        if "error" in preprocessing_result:
+            raise HTTPException(status_code=500, detail=preprocessing_result["error"])
+
+        # Basic analysis (keeping original functionality)
         analysis = analyze_dataframe(df, "overview")
-        
-        return {
+
+        # Combine results
+        result = {
             "filename": file.filename,
             "user": current_user.username,
-            "analysis": analysis
+            "basic_analysis": analysis,
+            "ml_preprocessing": preprocessing_result,
         }
-    
+
+        return result
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @app.post("/analyze/", response_model=DataAnalysisResult)
 async def analyze_data(
-    prompt: str,
+    prompt: str = Form(...),
     file: UploadFile = File(...),
-    current_user: User = Depends(get_current_active_user)
+    current_user: User = Depends(get_current_active_user),
 ):
     try:
         # Read file
-        if file.filename.endswith('.csv'):
+        if file.filename.endswith(".csv"):
             contents = await file.read()
-            df = pd.read_csv(io.StringIO(contents.decode('utf-8')))
-        elif file.filename.endswith(('.xls', '.xlsx')):
+            df = pd.read_csv(io.StringIO(contents.decode("utf-8")))
+        elif file.filename.endswith((".xls", ".xlsx")):
             contents = await file.read()
             df = pd.read_excel(io.BytesIO(contents))
         else:
             raise HTTPException(status_code=400, detail="Unsupported file type")
-        
-        # Perform analysis based on prompt
-        analysis = analyze_dataframe(df, prompt)
-        
-        return DataAnalysisResult(
-            insight=analysis.get("insight", "Analysis completed"),
-            visualization=analysis.get("visualization"),
-            data=analysis
+
+        # Preprocess with ML engine
+        preprocessing_result = analysis_engine.preprocess_data(df)
+
+        if "error" in preprocessing_result:
+            # Fall back to basic analysis if ML preprocessing fails
+            analysis = analyze_dataframe(df, prompt)
+            return DataAnalysisResult(
+                insight=analysis.get("insight", "Analysis completed"),
+                visualization=analysis.get("visualization"),
+                data=analysis,
+            )
+
+        # Use ML-powered analysis with the prompt
+        ml_result = analysis_engine.analyze_data_with_prompt(
+            preprocessing_result["data_id"], prompt
         )
-    
+
+        if "error" in ml_result:
+            # Fall back to basic analysis if ML analysis fails
+            analysis = analyze_dataframe(df, prompt)
+            return DataAnalysisResult(
+                insight=analysis.get("insight", "Analysis completed"),
+                visualization=analysis.get("visualization"),
+                data=analysis,
+            )
+
+        # Extract explanation and visualization
+        explanation = ml_result.get("result", {}).get(
+            "explanation", "Analysis completed"
+        )
+
+        # Prepare result using ML analysis
+        return DataAnalysisResult(
+            insight=explanation,
+            visualization=ml_result.get("result", {})
+            .get("plots", {})
+            .get("clusters", ""),
+            data=ml_result,
+        )
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.get("/", tags=["Root"])
 async def root():
@@ -244,5 +354,105 @@ async def root():
         "message": "Business Insights API",
         "version": "0.1.0",
         "docs": "/docs",
-        "redoc": "/redoc"
+        "redoc": "/redoc",
     }
+
+
+# New routes for ML analysis
+@app.post("/ml/analyze/", tags=["ML Analysis"])
+async def analyze_with_ml(analysis_request: AnalysisRequest):
+    """
+    Analyze data using natural language prompt and ML
+    """
+    result = analysis_engine.analyze_data_with_prompt(
+        analysis_request.data_id, analysis_request.prompt
+    )
+
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
+
+    return result
+
+
+@app.post("/ml/time-series/", tags=["ML Analysis"])
+async def analyze_time_series(request: TimeSeriesRequest):
+    """
+    Perform time series analysis and forecasting
+    """
+    result = analysis_engine.analyze_with_time_series(
+        request.data_id, request.date_col, request.value_col, request.periods
+    )
+
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
+
+    return result
+
+
+@app.post("/ml/clustering/", tags=["ML Analysis"])
+async def analyze_clustering(request: ClusteringRequest):
+    """
+    Perform clustering/segmentation analysis
+    """
+    result = analysis_engine.analyze_with_clustering(
+        request.data_id, request.features, request.n_clusters
+    )
+
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
+
+    return result
+
+
+@app.post("/ml/anomaly-detection/", tags=["ML Analysis"])
+async def analyze_anomalies(request: AnomalyDetectionRequest):
+    """
+    Perform anomaly/outlier detection
+    """
+    result = analysis_engine.analyze_with_anomaly_detection(
+        request.data_id, request.features, request.contamination
+    )
+
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
+
+    return result
+
+
+@app.post("/ml/visualization/", tags=["ML Analysis"])
+async def get_visualization(request: VisualizationRequest):
+    """
+    Get visualization data for a specific analysis
+    """
+    result = analysis_engine.get_visualization_data(
+        request.analysis_id, request.viz_type
+    )
+
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
+
+    return result
+
+
+@app.get("/ml/analyses/", tags=["ML Analysis"])
+async def list_analyses():
+    """
+    Get a list of all analyses
+    """
+    return analysis_engine.get_analysis_list()
+
+
+@app.get("/ml/datasets/", tags=["ML Analysis"])
+async def list_datasets():
+    """
+    Get a list of all datasets
+    """
+    return analysis_engine.get_data_list()
+
+
+@app.post("/ml/clear-cache/", tags=["ML Analysis"])
+async def clear_cache(older_than_days: int = 1):
+    """
+    Clear cached data and analyses
+    """
+    return analysis_engine.clear_cache(older_than_days)
