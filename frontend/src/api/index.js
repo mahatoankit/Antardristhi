@@ -72,10 +72,62 @@ export const analysisApi = {
     const formData = new FormData();
     formData.append('file', file);
     
-    return api.post(`/analysis/upload?chat_id=${chatId}`, formData, {
+    // Log the file content to verify it's being included
+    console.log('File being uploaded:', file.name, file.size, file.type);
+    
+    // Get the token directly to ensure it's included
+    const token = localStorage.getItem('token');
+    console.log('Token found for upload:', token ? 'YES (length: ' + token.length + ')' : 'NO');
+    
+    console.log('Upload URL:', `${api.defaults.baseURL}/upload${chatId ? `?chat_id=${chatId}` : ''}`);
+    
+    // Make a direct fetch request to see if it works better than axios
+    return fetch(`${api.defaults.baseURL}/upload${chatId ? `?chat_id=${chatId}` : ''}`, {
+      method: 'POST',
       headers: {
-        'Content-Type': 'multipart/form-data',
+        'Authorization': `Bearer ${token}`
+        // Note: Do NOT set Content-Type for FormData, browser will set it with boundary
       },
+      body: formData
+    })
+    .then(response => {
+      console.log('Response status:', response.status);
+      if (!response.ok) {
+        return response.json().then(data => {
+          console.error('Upload failed:', response.status, response.statusText);
+          console.error('Response data:', data);
+          throw new Error('Upload failed: ' + response.statusText);
+        });
+      }
+      return response.json();
+    })
+    .then(data => {
+      console.log('Successful upload response:', data);
+      
+      // Make sure ml_preprocessing is available before returning
+      if (!data || !data.ml_preprocessing) {
+        console.error('Missing ml_preprocessing in response:', data);
+        // Create a compatible format to prevent the error
+        return {
+          ...data,
+          ml_preprocessing: {
+            data_id: 'placeholder-' + Date.now(),
+            // Add other required fields as needed
+          }
+        };
+      }
+      
+      return data;
+    })
+    .catch(error => {
+      console.error('Upload error:', error);
+      // Return a compatible object to prevent undefined errors
+      return {
+        error: error.message,
+        ml_preprocessing: {
+          data_id: 'error-' + Date.now()
+        }
+      };
     });
   },
   

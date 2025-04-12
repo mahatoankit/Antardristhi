@@ -72,7 +72,7 @@ class User(BaseModel):
     email: Optional[str] = None
     full_name: Optional[str] = None
     user_type: Optional[str] = None
-    disabled: Optional[bool] = None
+    is_active: Optional[bool] = None  # Changed from 'disabled' to 'is_active'
 
 
 class UserInDB(User):
@@ -178,7 +178,9 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     return encoded_jwt
 
 
-async def get_current_user(token: str = Depends(oauth2_scheme)):
+async def get_current_user(
+    token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)
+):
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
@@ -189,17 +191,19 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
         username: str = payload.get("sub")
         if username is None:
             raise credentials_exception
-        token_data = TokenData(username=username)
     except JWTError:
         raise credentials_exception
-    user = get_user(fake_users_db, username=token_data.username)
+
+    # Use the real database instead of fake_users_db
+    user = user_crud.get_user_by_username(db, username=username)
     if user is None:
         raise credentials_exception
     return user
 
 
 async def get_current_active_user(current_user: User = Depends(get_current_user)):
-    if current_user.disabled:
+    # Changed from checking 'disabled' to checking 'is_active'
+    if current_user.is_active == False:
         raise HTTPException(status_code=400, detail="Inactive user")
     return current_user
 
@@ -265,7 +269,9 @@ async def read_users_me(current_user: User = Depends(get_current_active_user)):
 
 @app.post("/upload/")
 async def upload_data(
-    file: UploadFile = File(...), current_user: User = Depends(get_current_active_user)
+    file: UploadFile = File(...),
+    chat_id: Optional[str] = None,
+    current_user: schemas.User = Depends(get_current_user),
 ):
     try:
         # Check file type
@@ -296,12 +302,24 @@ async def upload_data(
             "user": current_user.username,
             "basic_analysis": analysis,
             "ml_preprocessing": preprocessing_result,
+            "chat_id": chat_id,
         }
 
         return result
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# Add duplicate route for /upload without trailing slash
+@app.post("/upload")
+async def upload_data_no_slash(
+    file: UploadFile = File(...),
+    chat_id: Optional[str] = None,
+    current_user: schemas.User = Depends(get_current_user),
+):
+    # Re-use the same upload_data function to handle the request
+    return await upload_data(file=file, chat_id=chat_id, current_user=current_user)
 
 
 @app.post("/analyze/", response_model=DataAnalysisResult)
@@ -581,3 +599,97 @@ def startup_event():
         logger.error(f"Error creating default profiles: {e}")
     finally:
         db.close()
+
+
+# Chat and Message Routes
+@app.post("/chats", response_model=schemas.Chat, tags=["Chats"])
+def create_chat(
+    chat: schemas.ChatCreate,
+    db: Session = Depends(get_db),
+    current_user: schemas.User = Depends(get_current_user),
+):
+    """Create a new chat"""
+    return user_crud.create_chat(db, user_id=current_user.id, title=chat.title)
+
+
+@app.get("/chats", response_model=List[schemas.Chat], tags=["Chats"])
+def get_user_chats(
+    db: Session = Depends(get_db),
+    current_user: schemas.User = Depends(get_current_user),
+):
+    """Get all chats for the current user"""
+    return user_crud.get_chats_by_user(db, user_id=current_user.id)
+
+
+@app.get("/chats/{chat_id}", response_model=schemas.Chat, tags=["Chats"])
+def get_chat(
+    chat_id: int,
+    db: Session = Depends(get_db),
+    current_user: schemas.User = Depends(get_current_user),
+):
+    """Get a specific chat"""
+    chat = user_crud.get_chat(db, chat_id=chat_id)
+    if not chat or chat.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Chat not found")
+    return chat
+
+
+@app.get(
+    "/chats/{chat_id}/messages",
+    response_model=List[schemas.ChatMessage],
+    tags=["Messages"],
+)
+def get_chat_messages(
+    chat_id: int,
+    db: Session = Depends(get_db),
+    current_user: schemas.User = Depends(get_current_user),
+):
+    """Get all messages for a specific chat"""
+    chat = user_crud.get_chat(db, chat_id=chat_id)
+    if not chat or chat.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Chat not found")
+    return user_crud.get_chat_messages(db, chat_id=chat_id)
+
+
+@app.post(
+    "/chats/{chat_id}/messages", response_model=schemas.ChatMessage, tags=["Messages"]
+)
+def create_chat_message(
+    chat_id: int,
+    message: dict,  # Changed from schemas.ChatMessageCreate to dict
+    db: Session = Depends(get_db),
+    current_user: schemas.User = Depends(get_current_user),
+):
+    """Add a message to a chat"""
+    chat = user_crud.get_chat(db, chat_id=chat_id)
+    if not chat or chat.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Chat not found")
+
+    # Create a proper ChatMessageCreate object with all required fields
+    message_data = {
+        "content": message.get("content", ""),
+        "is_user": True,
+        "chat_id": chat_id,
+        "data_reference_id": message.get("data_reference_id"),
+        "analysis_reference_id": message.get("analysis_reference_id"),
+    }
+
+    # Create the message in the database
+    user_message = user_crud.create_chat_message(
+        db, schemas.ChatMessageCreate(**message_data)
+    )
+
+    # Generate an AI response (simple echo for now)
+    response_data = {
+        "content": f"You said: {message.get('content', '')}",
+        "is_user": False,
+        "chat_id": chat_id,
+    }
+
+    # Create the assistant message
+    assistant_message = user_crud.create_chat_message(
+        db, schemas.ChatMessageCreate(**response_data)
+    )
+
+    # Return the user message (the frontend will handle the assistant message)
+    return user_message

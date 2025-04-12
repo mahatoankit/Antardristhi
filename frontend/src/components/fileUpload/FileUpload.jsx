@@ -32,9 +32,16 @@ const FileUpload = () => {
       // Upload the file to the backend
       const response = await analysisApi.uploadFile(file, activeChat?.id);
       
+      // Get file ID from the appropriate location in the response
+      const fileId = response.data.ml_preprocessing?.data_id;
+      
+      if (!fileId) {
+        throw new Error('File ID not found in the server response');
+      }
+      
       // Update the file in the current chat
       setCurrentDataFile({
-        id: response.data.file_id,
+        id: fileId,
         name: file.name,
         type: file.type,
         size: file.size,
@@ -43,13 +50,13 @@ const FileUpload = () => {
       
       // Get suggested questions based on the uploaded file
       setLoading(true);
-      const suggestionsResponse = await analysisApi.getSuggestedQuestions(response.data.file_id);
+      const suggestionsResponse = await analysisApi.getSuggestedQuestions(fileId);
       setCurrentSuggestedQuestions(suggestionsResponse.data.questions || []);
       
       setUploading(false);
       setLoading(false);
     } catch (err) {
-      setError(err.response?.data?.message || 'An error occurred while uploading the file.');
+      setError(err.response?.data?.message || err.message || 'An error occurred while uploading the file.');
       setUploading(false);
     }
   }, [activeChat, setCurrentDataFile, setLoading, setCurrentSuggestedQuestions]);
