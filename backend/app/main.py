@@ -693,3 +693,214 @@ def create_chat_message(
 
     # Return the user message (the frontend will handle the assistant message)
     return user_message
+
+
+@app.get("/analysis/suggested-questions", tags=["ML Analysis"])
+async def get_suggested_questions(
+    file_id: str, current_user: schemas.User = Depends(get_current_user)
+):
+    """
+    Generate suggested questions for a dataset based on its content
+    """
+    try:
+        # Check if data exists
+        if file_id not in analysis_engine.preprocessed_data:
+            raise HTTPException(
+                status_code=404, detail=f"Dataset with ID {file_id} not found"
+            )
+
+        # Get sample of the dataset
+        data_info = analysis_engine.preprocessed_data[file_id]
+        df = data_info["df"]
+
+        # Get a sample of the data (first 5 rows)
+        sample_data = df.head(5).to_dict()
+
+        # Get column information
+        column_types = data_info["column_types"]
+
+        # Use Gemini to generate questions
+        questions = []
+        try:
+            import google.generativeai as genai
+
+            # Check if API key is available
+            if os.getenv("GOOGLE_API_KEY"):
+                # Configure the Gemini API
+                genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
+
+                # Select the Gemini model
+                model = genai.GenerativeModel("gemini-1.5-flash")
+
+                # Create a prompt for generating questions
+                prompt = f"""
+                You are an AI data analyst. Examine this dataset sample and generate 5 relevant, specific questions that a user might want to ask about this data.
+                
+                The questions should be analytical in nature and cover different aspects of the data.
+                
+                Dataset columns: {list(df.columns)}
+                Column types: {column_types}
+                Sample data: {json.dumps(sample_data, default=str)}
+                
+                Return ONLY a list of 5 questions, one per line, without numbering or any other text.
+                """
+
+                # Call the Gemini API
+                response = model.generate_content(prompt)
+
+                if response and response.text:
+                    # Clean and process the response
+                    raw_questions = response.text.strip().split("\n")
+                    questions = [q.strip() for q in raw_questions if q.strip()]
+                    # Limit to 5 questions
+                    questions = questions[:5]
+
+            # If Gemini fails or no API key, fall back to default questions
+            if not questions:
+                raise Exception("No questions generated")
+
+        except Exception as e:
+            logger.warning(f"Error generating questions with Gemini: {str(e)}")
+            # Fall back to default questions based on column types
+            if "numeric" in column_types and column_types["numeric"]:
+                questions.append(f"What is the average {column_types['numeric'][0]}?")
+                if len(column_types["numeric"]) > 1:
+                    questions.append(
+                        f"What is the relationship between {column_types['numeric'][0]} and {column_types['numeric'][1]}?"
+                    )
+
+            if "categorical" in column_types and column_types["categorical"]:
+                cat_col = column_types["categorical"][0]
+                questions.append(
+                    f"How is the data distributed across different {cat_col} categories?"
+                )
+
+                if "numeric" in column_types and column_types["numeric"]:
+                    questions.append(
+                        f"Compare {column_types['numeric'][0]} across different {cat_col} groups"
+                    )
+
+            if "datetime" in column_types and column_types["datetime"]:
+                questions.append(f"How has the data changed over time?")
+
+            # Add generic questions if we don't have enough
+            generic_questions = [
+                "What patterns or trends can you identify in this dataset?",
+                "Are there any outliers or anomalies in the data?",
+                "What are the key insights from this dataset?",
+                "Can you provide a summary of the most important features?",
+                "What recommendations would you make based on this data?",
+            ]
+
+            while len(questions) < 5 and generic_questions:
+                questions.append(generic_questions.pop(0))
+
+        return {"questions": questions}
+
+    except Exception as e:
+        logger.error(f"Error generating suggested questions: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/analysis/analyze", tags=["ML Analysis"])
+async def analyze_data_query(
+    request: dict, current_user: schemas.User = Depends(get_current_user)
+):
+    """
+    Analyze data using a natural language query and Gemini
+    """
+    try:
+        file_id = request.get("file_id")
+        query = request.get("query")
+
+        if not file_id or not query:
+            raise HTTPException(
+                status_code=400, detail="Both file_id and query are required"
+            )
+
+        # Check if data exists
+        if file_id not in analysis_engine.preprocessed_data:
+            raise HTTPException(
+                status_code=404, detail=f"Dataset with ID {file_id} not found"
+            )
+
+        # Get the preprocessed data
+        data_info = analysis_engine.preprocessed_data[file_id]
+        df = data_info["df"]
+
+        # First, try to analyze with ML engine
+        ml_result = analysis_engine.analyze_data_with_prompt(file_id, query)
+
+        if "error" not in ml_result:
+            return {"result": ml_result.get("result", {})}
+
+        # If ML analysis fails, try to use Gemini directly
+        try:
+            import google.generativeai as genai
+
+            # Check if API key is available
+            if not os.getenv("GOOGLE_API_KEY"):
+                raise Exception("GOOGLE_API_KEY not found in environment variables")
+
+            # Configure the Gemini API
+            genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
+
+            # Select the Gemini model
+            model = genai.GenerativeModel("gemini-1.5-flash")
+
+            # Get sample of data
+            sample_data = df.head(10).to_dict()
+            column_types = data_info["column_types"]
+
+            # Create a prompt
+            prompt = f"""
+            You are an expert data analyst. Answer the following question about this dataset:
+            
+            Question: {query}
+            
+            Dataset information:
+            - Columns: {list(df.columns)}
+            - Column types: {column_types}
+            - Shape: {df.shape[0]} rows, {df.shape[1]} columns
+            - Sample data: {json.dumps(sample_data, default=str)}
+            
+            Basic statistics:
+            {df.describe().to_json()}
+            
+            Provide a clear, concise, and informative answer. If appropriate, suggest visualizations or further analysis that might be relevant.
+            """
+
+            # Call the Gemini API
+            response = model.generate_content(prompt)
+
+            if response and response.text:
+                # Create a result structure similar to what ML engine would return
+                return {
+                    "result": {
+                        "explanation": response.text,
+                        "text": response.text,
+                        "analysis_type": "gemini_direct",
+                        "query": query,
+                    }
+                }
+            else:
+                raise Exception("No response from Gemini")
+
+        except Exception as e:
+            logger.error(f"Error using Gemini directly: {str(e)}")
+
+            # Final fallback - use basic analysis
+            # Create a basic analysis of the data
+            basic_analysis = {
+                "text": f"Here's a basic analysis of your data in response to: '{query}'",
+                "description": df.describe().to_dict(),
+                "columns": list(df.columns),
+                "rows": df.shape[0],
+                "missing_values": df.isnull().sum().to_dict(),
+            }
+
+            return {"result": basic_analysis}
+
+    except Exception as e:
+        logger.error(f"Error analyzing data query: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))

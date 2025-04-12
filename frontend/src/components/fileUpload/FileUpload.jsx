@@ -50,12 +50,24 @@ const FileUpload = () => {
       
       // Get suggested questions based on the uploaded file
       setLoading(true);
-      const suggestionsResponse = await analysisApi.getSuggestedQuestions(fileId);
-      setCurrentSuggestedQuestions(suggestionsResponse.data.questions || []);
+      try {
+        const suggestionsResponse = await analysisApi.getSuggestedQuestions(fileId);
+        if (suggestionsResponse.data && suggestionsResponse.data.questions) {
+          setCurrentSuggestedQuestions(suggestionsResponse.data.questions);
+          console.log("Got suggested questions:", suggestionsResponse.data.questions);
+        } else {
+          console.warn("No questions found in response:", suggestionsResponse);
+          setCurrentSuggestedQuestions([]);
+        }
+      } catch (suggestionError) {
+        console.error("Error fetching suggested questions:", suggestionError);
+        setCurrentSuggestedQuestions([]);
+      }
       
       setUploading(false);
       setLoading(false);
     } catch (err) {
+      console.error("File upload error:", err);
       setError(err.response?.data?.message || err.message || 'An error occurred while uploading the file.');
       setUploading(false);
     }
