@@ -120,13 +120,10 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 Your Name - [@yourtwitter](https://twitter.com/yourtwitter) - email@example.com
 
-Project Link: [https://github.com/yourusername/DataChat](https://github.com/yourusername/DataChat)
+Project Link: [https://github.com/mahatoankit/antardristhi](https://github.com/yourusername/DataChat)
 
 ## Acknowledgments 🙏
 
 - Google Generative AI for providing the Gemini API
 - Streamlit for the awesome web framework
 - The open-source community for various dependencies
-
----
-Made with ❤️ by [Your Name]
