@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sales Data Analyzer</title>
+    <script src="https://cdn.jsdelivr.net/pyodide/v0.25.0/full/pyodide.js"></script>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container my-5">
+        <h1 class="text-center mb-4">Sales Data Analyzer</h1>
+        
+        <div class="card p-4 mb-4">
+            <h3>Upload Your Sales Data</h3>
+            <p class="text-muted">Please upload a CSV file containing your sales data</p>
+            <input type="file" id="fileInput" accept=".csv" class="form-control mb-3">
+            <button id="analyzeBtn" class="btn btn-primary" disabled>Analyze Data</button>
+        </div>
+
+        <div id="loadingIndicator" class="d-none">
+            <div class="spinner-border text-primary" role="status">
+                <span class="visually-hidden">Loading...</span>
+            </div>
+            <p>Processing your data...</p>
+        </div>
+
+        <div id="results" class="d-none">
+            <div class="card mb-4">
+                <div class="card-header">
+                    <h4>Summary Statistics</h4>
+                </div>
+                <div class="card-body">
+                    <div id="summaryStats"></div>
+                </div>
+            </div>
+
+            <div class="card mb-4">
+                <div class="card-header">
+                    <h4>Sales Trends</h4>
+                </div>
+                <div class="card-body">
+                    <canvas id="salesTrendChart"></canvas>
+                </div>
+            </div>
+
+            <div class="card mb-4">
+                <div class="card-header">
+                    <h4>Category Performance</h4>
+                </div>
+                <div class="card-body">
+                    <canvas id="categoryChart"></canvas>
+                </div>
+            </div>
+
+            <button id="downloadReport" class="btn btn-success">Download Report (PDF)</button>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
