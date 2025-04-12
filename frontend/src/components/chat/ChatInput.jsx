@@ -4,6 +4,7 @@ import { analysisApi, messageApi } from '../../api';
 
 const ChatInput = () => {
   const [inputValue, setInputValue] = useState('');
+  const [errorMessage, setErrorMessage] = useState('');
   const { activeChat, addMessage, dataFile, suggestedQuestions, setLoading, setCurrentAnalysisResults } = useChat();
   const textareaRef = useRef(null);
   
@@ -24,6 +25,14 @@ const ChatInput = () => {
     if (e) e.preventDefault(); // Ensure preventDefault is called
     
     if (!inputValue.trim()) return;
+    
+    // Clear any previous error
+    setErrorMessage('');
+    
+    // Log debug info
+    console.log('Sending message:', inputValue);
+    console.log('Active chat:', activeChat);
+    console.log('Data file:', dataFile);
     
     // Add user message to the chat
     const userMessage = {
@@ -47,10 +56,18 @@ const ChatInput = () => {
       
       if (dataFile) {
         // If a data file is uploaded, send the message for analysis
-        response = await analysisApi.analyzeData(dataFile.id, messageContent);
+        console.log('Analyzing data with file_id:', dataFile.id, 'and query:', messageContent);
+        
+        try {
+          response = await analysisApi.analyzeData(dataFile.id, messageContent);
+          console.log('Analysis response:', response);
+        } catch (analyzeError) {
+          console.error('Error during data analysis:', analyzeError);
+          throw new Error(`Analysis request failed: ${analyzeError.message || 'Unknown error'}`);
+        }
         
         // Add assistant message to the chat
-        if (response.data && response.data.result) {
+        if (response && response.data && response.data.result) {
           const assistantMessage = {
             id: Date.now().toString(),
             role: 'assistant',
@@ -100,6 +117,7 @@ const ChatInput = () => {
           // Store the analysis results
           setCurrentAnalysisResults(response.data.result);
         } else {
+          console.warn('Response or result missing:', response);
           const errorMessage = {
             id: Date.now().toString(),
             role: 'assistant',
@@ -111,13 +129,21 @@ const ChatInput = () => {
         }
       } else {
         // If no data file is uploaded, just send the message as a regular chat message
-        response = await messageApi.sendMessage(activeChat.id, {
-          content: messageContent,
-          role: 'user',
-        });
+        console.log('Sending regular chat message to chat ID:', activeChat?.id);
+        
+        try {
+          response = await messageApi.sendMessage(activeChat.id, {
+            content: messageContent,
+            role: 'user',
+          });
+          console.log('Message response:', response);
+        } catch (messageError) {
+          console.error('Error sending message:', messageError);
+          throw new Error(`Message request failed: ${messageError.message || 'Unknown error'}`);
+        }
         
         // Add assistant message to the chat
-        if (response.data && response.data.message) {
+        if (response && response.data && response.data.message) {
           const assistantMessage = {
             id: Date.now().toString(),
             role: 'assistant',
@@ -126,15 +152,20 @@ const ChatInput = () => {
           };
           
           addMessage(assistantMessage);
+        } else {
+          console.warn('Message response invalid:', response);
+          throw new Error('Invalid response from server');
         }
       }
     } catch (err) {
-      console.error('Error sending message:', err);
+      console.error('Error in handleSendMessage:', err);
+      setErrorMessage(err.message || 'An error occurred while processing your message');
+      
       // Add error message to the chat
       const errorMessage = {
         id: Date.now().toString(),
         role: 'assistant',
-        content: `Sorry, I encountered an error: ${err.response?.data?.message || 'Something went wrong. Please try again.'}`,
+        content: `Sorry, I encountered an error: ${err.response?.data?.message || err.message || 'Something went wrong. Please try again.'}`,
         timestamp: new Date().toISOString(),
       };
       
@@ -160,6 +191,12 @@ const ChatInput = () => {
   
   return (
     <div className="border-t border-gray-200 p-4">
+      {errorMessage && (
+        <div className="mb-4 p-3 bg-red-100 text-red-700 rounded-md">
+          <p className="text-sm">{errorMessage}</p>
+        </div>
+      )}
+      
       {suggestedQuestions && suggestedQuestions.length > 0 && (
         <div className="mb-4">
           <h3 className="text-sm font-medium text-gray-700 mb-2">Suggested questions:</h3>

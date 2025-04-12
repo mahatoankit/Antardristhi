@@ -136,10 +136,47 @@ export const analysisApi = {
   
   getSuggestedQuestions: (fileId) => api.get(`/analysis/suggested-questions?file_id=${fileId}`),
   
-  analyzeData: (fileId, query) => api.post('/analysis/analyze', {
-    file_id: fileId,
-    query,
-  }),
+  analyzeData: (fileId, query) => {
+    console.log(`Making analyzeData request with fileId=${fileId} and query="${query}"`);
+    
+    // Log request URL and data
+    const requestUrl = `${api.defaults.baseURL}/analysis/analyze`;
+    console.log('Request URL:', requestUrl);
+    console.log('Request data:', { file_id: fileId, query });
+    
+    try {
+      return api.post('/analysis/analyze', {
+        file_id: fileId,
+        query,
+      })
+      .then(response => {
+        console.log('Analysis response received:', response);
+        return response;
+      })
+      .catch(error => {
+        console.error('Analysis request failed:', error);
+        // Provide detailed error information
+        if (error.response) {
+          // The request was made and the server responded with a status code
+          // that falls out of the range of 2xx
+          console.error('Response data:', error.response.data);
+          console.error('Response status:', error.response.status);
+          console.error('Response headers:', error.response.headers);
+        } else if (error.request) {
+          // The request was made but no response was received
+          console.error('No response received:', error.request);
+        } else {
+          // Something happened in setting up the request
+          console.error('Error setting up request:', error.message);
+        }
+        
+        throw error;
+      });
+    } catch (error) {
+      console.error('Error in analyzeData function:', error);
+      throw error;
+    }
+  },
   
   getDataPreview: (fileId) => api.get(`/analysis/preview?file_id=${fileId}`),
 };

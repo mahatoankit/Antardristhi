@@ -1,3 +1,6 @@
+# Import TensorFlow initialization to suppress warnings
+from .utils.tf_init import *
+
 from fastapi import (
     FastAPI,
     Depends,
@@ -15,6 +18,7 @@ from typing import Optional, List, Dict, Any
 import pandas as pd
 import numpy as np
 import io
+import traceback
 from datetime import datetime, timedelta
 from jose import JWTError, jwt
 from passlib.context import CryptContext
@@ -727,10 +731,11 @@ async def get_suggested_questions(
             # Check if API key is available
             if os.getenv("GOOGLE_API_KEY"):
                 # Configure the Gemini API
+
                 genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
 
                 # Select the Gemini model
-                model = genai.GenerativeModel("gemini-1.5-flash")
+                model = genai.GenerativeModel("gemini-2.0-flash")
 
                 # Create a prompt for generating questions
                 prompt = f"""
@@ -810,16 +815,28 @@ async def analyze_data_query(
     Analyze data using a natural language query and Gemini
     """
     try:
+        # Log incoming request
+        logger.info(f"ANALYSIS REQUEST RECEIVED: {json.dumps(request, default=str)}")
+        logger.info(f"User: {current_user.username}")
+
         file_id = request.get("file_id")
         query = request.get("query")
 
+        logger.info(
+            f"Processing analysis request - file_id: {file_id}, query: '{query}'"
+        )
+
         if not file_id or not query:
+            logger.error(
+                f"Missing required parameters: file_id={file_id}, query={query}"
+            )
             raise HTTPException(
                 status_code=400, detail="Both file_id and query are required"
             )
 
         # Check if data exists
         if file_id not in analysis_engine.preprocessed_data:
+            logger.error(f"Dataset not found: {file_id}")
             raise HTTPException(
                 status_code=404, detail=f"Dataset with ID {file_id} not found"
             )
@@ -827,26 +844,39 @@ async def analyze_data_query(
         # Get the preprocessed data
         data_info = analysis_engine.preprocessed_data[file_id]
         df = data_info["df"]
+        logger.info(f"Dataset found: {file_id}, shape: {df.shape}")
 
         # First, try to analyze with ML engine
+        logger.info(f"Attempting analysis with ML engine")
         ml_result = analysis_engine.analyze_data_with_prompt(file_id, query)
 
         if "error" not in ml_result:
+            logger.info(f"ML engine analysis successful")
             return {"result": ml_result.get("result", {})}
+        else:
+            logger.warning(f"ML engine analysis failed: {ml_result.get('error')}")
 
         # If ML analysis fails, try to use Gemini directly
         try:
+            logger.info(f"Attempting analysis with Gemini directly")
             import google.generativeai as genai
 
             # Check if API key is available
-            if not os.getenv("GOOGLE_API_KEY"):
+            api_key = os.getenv("GOOGLE_API_KEY")
+            if not api_key:
+                logger.error("GOOGLE_API_KEY not found in environment variables")
                 raise Exception("GOOGLE_API_KEY not found in environment variables")
 
+            logger.info(
+                f"Gemini API key available (masked): {api_key[:5]}...{api_key[-3:]}"
+            )
+
             # Configure the Gemini API
-            genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
+            genai.configure(api_key=api_key)
 
             # Select the Gemini model
             model = genai.GenerativeModel("gemini-1.5-flash")
+            logger.info(f"Gemini model initialized")
 
             # Get sample of data
             sample_data = df.head(10).to_dict()
@@ -870,10 +900,15 @@ async def analyze_data_query(
             Provide a clear, concise, and informative answer. If appropriate, suggest visualizations or further analysis that might be relevant.
             """
 
+            logger.info(f"Sending prompt to Gemini (length: {len(prompt)})")
+
             # Call the Gemini API
             response = model.generate_content(prompt)
 
             if response and response.text:
+                logger.info(
+                    f"Received response from Gemini (length: {len(response.text)})"
+                )
                 # Create a result structure similar to what ML engine would return
                 return {
                     "result": {
@@ -884,12 +919,16 @@ async def analyze_data_query(
                     }
                 }
             else:
+                logger.error("No response text received from Gemini")
                 raise Exception("No response from Gemini")
 
         except Exception as e:
             logger.error(f"Error using Gemini directly: {str(e)}")
+            logger.error(f"Exception type: {type(e).__name__}")
+            logger.error(f"Exception traceback: {traceback.format_exc()}")
 
             # Final fallback - use basic analysis
+            logger.info("Falling back to basic analysis")
             # Create a basic analysis of the data
             basic_analysis = {
                 "text": f"Here's a basic analysis of your data in response to: '{query}'",
@@ -899,8 +938,11 @@ async def analyze_data_query(
                 "missing_values": df.isnull().sum().to_dict(),
             }
 
+            logger.info("Returning basic analysis results")
             return {"result": basic_analysis}
 
     except Exception as e:
-        logger.error(f"Error analyzing data query: {str(e)}")
+        logger.error(f"Unhandled exception in analyze_data_query: {str(e)}")
+        logger.error(f"Exception type: {type(e).__name__}")
+        logger.error(f"Exception traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
