@@ -6,6 +6,9 @@ import os
 from datetime import datetime
 import io
 import base64
+import matplotlib.pyplot as plt
+import seaborn as sns
+from io import BytesIO
 
 # Import utility modules
 from ..utils.data_preprocessing import (
@@ -123,14 +126,14 @@ class AnalysisEngine:
 
     def analyze_data_with_prompt(self, data_id: str, prompt: str) -> Dict[str, Any]:
         """
-        Analyze data based on natural language prompt
+        Analyze data based on natural language prompt and return detailed answers.
 
         Args:
             data_id: ID of preprocessed dataset
             prompt: Natural language prompt describing the analysis
 
         Returns:
-            Dictionary with analysis results
+            Dictionary with analysis results and chat response
         """
         try:
             # Check if data exists
@@ -141,39 +144,78 @@ class AnalysisEngine:
             data_info = self.preprocessed_data[data_id]
             df = data_info["df"]
 
-            # Process the natural language query
-            query_analysis = process_natural_language_query(prompt, df.columns.tolist())
+            # Detect dataset type
+            detection = self.detect_dataset_type(df)
+            dataset_type = detection["dataset_type"]
+            column_types = detection["column_types"]
 
-            # Extract analysis plan
-            plan = query_analysis["analysis_plan"]
-
-            # Execute the appropriate analysis based on the intent
-            result = self._execute_analysis_plan(df, plan)
+            # Perform analysis based on dataset type
+            if dataset_type == "time_series":
+                if not column_types["time"]:
+                    return {"error": "Time series analysis requires a time column."}
+                result = self._analyze_time_series(df, column_types["time"], prompt)
+            elif dataset_type == "numeric":
+                result = self._analyze_numeric_data(df, column_types["numeric"], prompt)
+            elif dataset_type == "categorical":
+                result = self._analyze_categorical_data(df, column_types["categorical"], prompt)
+            else:
+                result = self._analyze_mixed_data(df, column_types, prompt)
 
             # Generate explanation
             if "error" not in result:
-                explanation = generate_llm_explanation(result, plan)
+                explanation = generate_llm_explanation(result, prompt)
                 result["explanation"] = explanation
 
-            # Store result
-            analysis_id = f"analysis_{datetime.now().strftime('%Y%m%d%H%M%S')}"
-            self.analysis_results[analysis_id] = {
-                "query_analysis": query_analysis,
-                "result": result,
-                "data_id": data_id,
-                "timestamp": datetime.now(),
-            }
+            # Generate chat response
+            chat_response = self.generate_chat_response(prompt, result)
 
-            # Return results with analysis ID
             return {
-                "analysis_id": analysis_id,
-                "query_analysis": query_analysis,
+                "chat_response": chat_response,
                 "result": result,
             }
 
         except Exception as e:
             logger.error(f"Error in prompt-based analysis: {str(e)}")
             return {"error": str(e)}
+
+    def generate_chat_response(self, prompt: str, result: Dict[str, Any]) -> str:
+        """
+        Generate a conversational response for chat based on the analysis result.
+
+        Args:
+            prompt: User's natural language prompt
+            result: Analysis result dictionary
+
+        Returns:
+            String response for chat
+        """
+        if "error" in result:
+            return f"Sorry, I couldn't process your request. Error: {result['error']}"
+
+        response = ""
+
+        # Include explanation if available
+        if "explanation" in result:
+            response += f"Here is the analysis based on your request: {result['explanation']}\n"
+
+        # Include statistics if available
+        if "statistics" in result:
+            response += "Here are some key statistics from your data:\n"
+            stats = result["statistics"]
+            for col, col_stats in stats.items():
+                response += f"- {col}: Mean = {col_stats.get('mean')}, Std = {col_stats.get('std')}\n"
+
+        # Include correlations if available
+        if "correlations" in result:
+            response += "Here are the correlations between numeric columns:\n"
+            for col, corr_values in result["correlations"].items():
+                response += f"- {col}: {corr_values}\n"
+
+        # Default response if no specific details are available
+        if not response:
+            response = "Here is the analysis of your data. Let me know if you need further details."
+
+        return response
 
     def analyze_with_time_series(
         self,
@@ -389,6 +431,61 @@ class AnalysisEngine:
         except Exception as e:
             logger.error(f"Error in anomaly detection: {str(e)}")
             return {"error": str(e)}
+
+    def analyze_cleanliness(self, data_id: str) -> Dict[str, Any]:
+        """
+        Analyze the cleanliness of the dataset.
+
+        Args:
+            data_id: ID of preprocessed dataset
+
+        Returns:
+            Dictionary with cleanliness metrics
+        """
+        try:
+            if data_id not in self.preprocessed_data:
+                return {"error": f"Dataset with ID {data_id} not found"}
+
+            data_info = self.preprocessed_data[data_id]
+            df = data_info["df"]
+
+            # Calculate missing values
+            missing_values = df.isnull().sum().to_dict()
+
+            # Detect outliers (example using Z-score)
+            outliers = {}
+            for col in df.select_dtypes(include=["float64", "int64"]).columns:
+                z_scores = (df[col] - df[col].mean()) / df[col].std()
+                outliers[col] = (z_scores.abs() > 3).sum()
+
+            return {
+                "missing_values": missing_values,
+                "outliers": outliers,
+            }
+
+        except Exception as e:
+            logger.error(f"Error analyzing cleanliness: {str(e)}")
+            return {"error": str(e)}
+
+    def analyze_missing_data(self, df: pd.DataFrame) -> Dict[str, Any]:
+        """
+        Analyze missing data in the dataset.
+
+        Args:
+            df: DataFrame containing the dataset
+
+        Returns:
+            Dictionary with missing data insights
+        """
+        missing_values = df.isnull().sum().to_dict()
+        total_missing = sum(missing_values.values())
+        missing_percentage = {col: (count / len(df)) * 100 for col, count in missing_values.items()}
+
+        return {
+            "total_missing": total_missing,
+            "missing_values": missing_values,
+            "missing_percentage": missing_percentage,
+        }
 
     def _execute_analysis_plan(
         self, df: pd.DataFrame, plan: Dict[str, Any]
@@ -677,3 +774,225 @@ class AnalysisEngine:
             del self.analysis_results[analysis_id]
 
         return {"data_cleared": data_cleared, "analysis_cleared": analysis_cleared}
+
+    def describe_dataset(self, data_id: str) -> Dict[str, Any]:
+        """
+        Generate a brief description of the dataset with chat-friendly output.
+
+        Args:
+            data_id: ID of preprocessed dataset
+
+        Returns:
+            Dictionary with dataset description and chat response
+        """
+        try:
+            if data_id not in self.preprocessed_data:
+                return {"error": f"Dataset with ID {data_id} not found"}
+
+            data_info = self.preprocessed_data[data_id]
+            df = data_info["df"]
+
+            description = {
+                "rows": df.shape[0],
+                "columns": df.shape[1],
+                "column_types": data_info["column_types"],
+                "missing_values": data_info["imputation_info"],
+                "time_columns": data_info["time_columns"],
+                "id_columns": data_info["id_columns"],
+                "summary_statistics": df.describe(include="all").to_dict(),
+            }
+
+            # Generate chat-friendly response
+            chat_response = (
+                f"The dataset contains {description['rows']} rows and {description['columns']} columns. "
+                f"It includes the following column types: {description['column_types']}. "
+                f"Missing values have been handled as follows: {description['missing_values']}. "
+                f"Time-related columns detected: {description['time_columns']}. "
+                f"ID columns detected: {description['id_columns']}."
+            )
+
+            return {"description": description, "chat_response": chat_response}
+
+        except Exception as e:
+            logger.error(f"Error describing dataset: {str(e)}")
+            return {"error": str(e)}
+
+    def suggest_questions(self, data_id: str) -> Dict[str, Any]:
+        """
+        Suggest questions based on the dataset with chat-friendly output.
+
+        Args:
+            data_id: ID of preprocessed dataset
+
+        Returns:
+            Dictionary with suggested questions and chat response
+        """
+        try:
+            if data_id not in self.preprocessed_data:
+                return {"error": f"Dataset with ID {data_id} not found"}
+
+            data_info = self.preprocessed_data[data_id]
+            column_types = data_info["column_types"]
+
+            questions = []
+            for col in column_types["numeric"]:
+                questions.append(f"What is the distribution of {col}?")
+                questions.append(f"Are there any correlations involving {col}?")
+
+            for col in column_types["categorical"]:
+                questions.append(f"What are the most common categories in {col}?")
+                questions.append(f"How does {col} relate to other columns?")
+
+            if data_info["time_columns"]:
+                time_col = data_info["time_columns"][0]
+                questions.append(f"What trends can be observed over {time_col}?")
+                questions.append(f"Are there any seasonal patterns in {time_col}?")
+
+            # Generate chat-friendly response
+            chat_response = (
+                "Here are some questions you can ask about your dataset:\n" +
+                "\n".join(f"- {q}" for q in questions)
+            )
+
+            return {"questions": questions, "chat_response": chat_response}
+
+        except Exception as e:
+            logger.error(f"Error suggesting questions: {str(e)}")
+            return {"error": str(e)}
+
+    def generate_visualizations(self, df: pd.DataFrame, column_types: Dict[str, List[str]]) -> Dict[str, Any]:
+        """
+        Generate visualizations based on the dataset.
+
+        Args:
+            df: DataFrame containing the dataset
+            column_types: Dictionary with column classifications
+
+        Returns:
+            Dictionary with visualization data
+        """
+        visualizations = {}
+
+        # Generate histograms for numeric columns
+        for col in column_types["numeric"]:
+            visualizations[f"histogram_{col}"] = df[col].plot(kind="hist").get_figure()
+
+        # Generate bar charts for categorical columns
+        for col in column_types["categorical"]:
+            visualizations[f"bar_chart_{col}"] = df[col].value_counts().plot(kind="bar").get_figure()
+
+        return visualizations
+
+    def generate_custom_visualization(
+        self, data_id: str, chart_type: str, x_col: str, y_col: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Generate a custom visualization based on user request.
+
+        Args:
+            data_id: ID of preprocessed dataset
+            chart_type: Type of chart (e.g., 'scatter', 'line', 'bar')
+            x_col: X-axis column
+            y_col: Y-axis column (optional)
+
+        Returns:
+            Dictionary with base64-encoded visualization
+        """
+        try:
+            if data_id not in self.preprocessed_data:
+                return {"error": f"Dataset with ID {data_id} not found"}
+
+            data_info = self.preprocessed_data[data_id]
+            df = data_info["df"]
+
+            plt.figure(figsize=(8, 6))
+            if chart_type == "scatter" and y_col:
+                sns.scatterplot(data=df, x=x_col, y=y_col)
+                plt.title(f"Scatter Plot of {x_col} vs {y_col}")
+            elif chart_type == "line" and y_col:
+                sns.lineplot(data=df, x=x_col, y=y_col)
+                plt.title(f"Line Plot of {x_col} vs {y_col}")
+            elif chart_type == "bar":
+                sns.barplot(x=df[x_col].value_counts().index, y=df[x_col].value_counts().values)
+                plt.title(f"Bar Chart of {x_col}")
+            else:
+                return {"error": f"Unsupported chart type: {chart_type}"}
+
+            buffer = BytesIO()
+            plt.savefig(buffer, format="png")
+            buffer.seek(0)
+            visualization = base64.b64encode(buffer.read()).decode("utf-8")
+            buffer.close()
+            plt.close()
+
+            return {"visualization": visualization}
+
+        except Exception as e:
+            logger.error(f"Error generating custom visualization: {str(e)}")
+            return {"error": str(e)}
+
+    def _analyze_time_series(self, df: pd.DataFrame, time_columns: List[str], prompt: str) -> Dict[str, Any]:
+        """
+        Perform time series analysis on the dataset.
+
+        Args:
+            df: DataFrame containing the dataset
+            time_columns: List of time-related columns
+            prompt: User's natural language prompt
+
+        Returns:
+            Dictionary with time series analysis results
+        """
+        try:
+            # Example: Perform trend analysis or forecasting
+            time_col = time_columns[0]
+            result = simple_trend_analysis(df, time_col)
+            return result
+        except Exception as e:
+            logger.error(f"Error in time series analysis: {str(e)}")
+            return {"error": str(e)}
+
+    def _analyze_categorical_data(self, df: pd.DataFrame, categorical_columns: List[str], prompt: str) -> Dict[str, Any]:
+        """
+        Perform analysis on categorical data.
+
+        Args:
+            df: DataFrame containing the dataset
+            categorical_columns: List of categorical columns
+            prompt: User's natural language prompt
+
+        Returns:
+            Dictionary with categorical analysis results
+        """
+        try:
+            category_counts = {col: df[col].value_counts().to_dict() for col in categorical_columns}
+            return {"category_counts": category_counts}
+        except Exception as e:
+            logger.error(f"Error in categorical data analysis: {str(e)}")
+            return {"error": str(e)}
+
+    def detect_dataset_type(self, df: pd.DataFrame) -> Dict[str, Any]:
+        """
+        Detect the type of dataset based on its columns.
+
+        Args:
+            df: DataFrame containing the dataset
+
+        Returns:
+            Dictionary with detected dataset type and column classifications
+        """
+        column_types = {
+            "numeric": df.select_dtypes(include=["float64", "int64"]).columns.tolist(),
+            "categorical": df.select_dtypes(include=["object", "category"]).columns.tolist(),
+            "time": [col for col in df.columns if pd.api.types.is_datetime64_any_dtype(df[col])],
+        }
+
+        dataset_type = "mixed"
+        if column_types["time"]:
+            dataset_type = "time_series"
+        elif column_types["numeric"] and not column_types["categorical"]:
+            dataset_type = "numeric"
+        elif column_types["categorical"] and not column_types["numeric"]:
+            dataset_type = "categorical"
+
+        return {"dataset_type": dataset_type, "column_types": column_types}

@@ -850,8 +850,69 @@ async def analyze_data_query(
         logger.info(f"Attempting analysis with ML engine")
         ml_result = analysis_engine.analyze_data_with_prompt(file_id, query)
 
+        # Determine if visualization is appropriate for this query
+        should_visualize = False
+        visualization_keywords = [
+            "chart",
+            "plot",
+            "graph",
+            "visual",
+            "show",
+            "display",
+            "trend",
+            "distribution",
+            "comparison",
+            "histogram",
+            "pie",
+            "bar",
+            "scatter",
+            "line",
+            "time series",
+            "correlation",
+            "relationship",
+            "compare",
+        ]
+
+        # Check if query indicates a desire for visualization
+        query_lower = query.lower()
+        should_visualize = any(
+            keyword in query_lower for keyword in visualization_keywords
+        )
+
+        logger.info(f"Query requests visualization: {should_visualize}")
+
+        # Generate visualizations only if appropriate
+        charts = []
+        if should_visualize:
+            logger.info(f"Generating visualizations for the dataset")
+            visualizations = analysis_engine.generate_auto_visualizations(file_id)
+
+            # If we have successful visualizations, add them to the result
+            if visualizations and not any("error" in viz for viz in visualizations):
+                # Add basic charts to result
+                for i, viz in enumerate(visualizations):
+                    chart_data = {
+                        "id": f"chart_{i}",
+                        "type": viz["type"],
+                        "title": viz["title"],
+                        "imageData": f"data:image/png;base64,{viz['image']}",
+                    }
+                    charts.append(chart_data)
+
+                logger.info(f"Added {len(charts)} visualizations")
+
+        # If ML engine was successful, add visualizations to its result if appropriate
         if "error" not in ml_result:
-            logger.info(f"ML engine analysis successful")
+            if "result" not in ml_result:
+                ml_result["result"] = {}
+
+            if should_visualize and charts:
+                ml_result["result"]["charts"] = charts
+                logger.info(f"Added visualizations to ML result")
+            else:
+                # Ensure charts field exists but is empty if no visualizations are needed
+                ml_result["result"]["charts"] = []
+
             return {"result": ml_result.get("result", {})}
         else:
             logger.warning(f"ML engine analysis failed: {ml_result.get('error')}")
@@ -878,26 +939,59 @@ async def analyze_data_query(
             model = genai.GenerativeModel("gemini-1.5-flash")
             logger.info(f"Gemini model initialized")
 
-            # Get sample of data
-            sample_data = df.head(10).to_dict()
+            # Generate basic stats and info about dataset
             column_types = data_info["column_types"]
+            sample_data = df.head(10).to_dict(orient="records")
+            numeric_stats = df.describe().to_dict()
+
+            # Count missing values
+            missing_values = df.isnull().sum().to_dict()
+
+            # Get correlation matrix for numeric columns
+            correlation_matrix = {}
+            if "numeric" in column_types and len(column_types["numeric"]) > 1:
+                correlation_matrix = df[column_types["numeric"]].corr().to_dict()
+
+            # Count unique values for categorical columns
+            categorical_stats = {}
+            if "categorical" in column_types and column_types["categorical"]:
+                for col in column_types["categorical"]:
+                    categorical_stats[col] = df[col].value_counts().head(10).to_dict()
+
+            # Modify the prompt to indicate whether visualizations are needed
+            visualization_instruction = ""
+            if should_visualize:
+                visualization_instruction = "The user has requested visualizations, so please describe any charts or visual elements that would help answer their question."
+            else:
+                visualization_instruction = "Focus on providing a text-based analysis without describing charts or visualizations."
 
             # Create a prompt
             prompt = f"""
-            You are an expert data analyst. Answer the following question about this dataset:
+            You are an expert data analyst explaining insights to a non-technical business user.
+            
+            Please analyze the following dataset and answer this question from the user:
             
             Question: {query}
             
             Dataset information:
+            - Dataset has {df.shape[0]} rows and {df.shape[1]} columns
             - Columns: {list(df.columns)}
             - Column types: {column_types}
-            - Shape: {df.shape[0]} rows, {df.shape[1]} columns
-            - Sample data: {json.dumps(sample_data, default=str)}
+            - Sample data (first 10 rows): {json.dumps(sample_data, default=str)}
             
-            Basic statistics:
-            {df.describe().to_json()}
+            Statistical information:
+            - Numeric statistics: {json.dumps(numeric_stats, default=str)}
+            - Missing values: {json.dumps(missing_values, default=str)}
+            - Correlation matrix: {json.dumps(correlation_matrix, default=str)}
+            - Categorical distributions: {json.dumps(categorical_stats, default=str)}
             
-            Provide a clear, concise, and informative answer. If appropriate, suggest visualizations or further analysis that might be relevant.
+            {visualization_instruction}
+            
+            Provide an insightful, thorough but concise answer that directly addresses the user's question.
+            Use clear language without technical jargon.
+            Include key numbers and statistics when relevant.
+            Focus on actionable insights that would be valuable for a business user.
+            DO NOT mention that you're analyzing the data or that you have access to the dataset - just provide the insights directly.
             """
 
             logger.info(f"Sending prompt to Gemini (length: {len(prompt)})")
@@ -909,7 +1003,7 @@ async def analyze_data_query(
                 logger.info(
                     f"Received response from Gemini (length: {len(response.text)})"
                 )
-                # Create a result structure similar to what ML engine would return
+                # Create a result structure with the Gemini response and visualizations if appropriate
                 gemini_response_text = response.text.strip()
                 return {
                     "result": {
@@ -917,6 +1011,7 @@ async def analyze_data_query(
                         "text": gemini_response_text,
                         "analysis_type": "gemini_direct",
                         "query": query,
+                        "charts": charts if should_visualize else [],
                     }
                 }
             else:
@@ -928,15 +1023,18 @@ async def analyze_data_query(
             logger.error(f"Exception type: {type(e).__name__}")
             logger.error(f"Exception traceback: {traceback.format_exc()}")
 
-            # Final fallback - use basic analysis
-            logger.info("Falling back to basic analysis")
+            # Final fallback - use basic analysis with visualizations if appropriate
+            logger.info("Falling back to basic analysis with visualizations")
+
             # Create a basic analysis of the data
             basic_analysis = {
                 "text": f"Here's a basic analysis of your data in response to: '{query}'",
+                "explanation": f"Here's a basic analysis of your data in response to: '{query}'",
                 "description": df.describe().to_dict(),
                 "columns": list(df.columns),
                 "rows": df.shape[0],
                 "missing_values": df.isnull().sum().to_dict(),
+                "charts": charts if should_visualize else [],
             }
 
             logger.info("Returning basic analysis results")

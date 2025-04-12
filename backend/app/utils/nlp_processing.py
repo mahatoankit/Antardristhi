@@ -615,24 +615,42 @@ def process_natural_language_query(query: str, df_columns: List[str]) -> Dict[st
     Returns:
         Dictionary with analysis plan
     """
-    # Classify intent
-    intent_result = classify_intent(query)
-    primary_intent = intent_result["primary_intent"]
+    try:
+        # Classify intent
+        intent_result = classify_intent(query)
+        primary_intent = intent_result["primary_intent"]
 
-    # Extract entities
-    entities = extract_entities(query)
-    entities["prompt"] = query  # Include original prompt
+        # Extract entities
+        entities = extract_entities(query)
+        entities["prompt"] = query  # Include original prompt
 
-    # Match entities to columns
-    matched_columns = match_entities_to_columns(entities, df_columns)
+        # Match entities to columns
+        matched_columns = match_entities_to_columns(entities, df_columns)
 
-    # Generate analysis plan
-    plan = generate_analysis_plan(primary_intent, entities, matched_columns)
+        # Generate analysis plan
+        plan = generate_analysis_plan(primary_intent, entities, matched_columns)
 
-    return {
-        "query": query,
-        "intent_classification": intent_result,
-        "entities": entities,
-        "matched_columns": matched_columns,
-        "analysis_plan": plan,
-    }
+        return {
+            "query": query,
+            "intent_classification": intent_result,
+            "entities": entities,
+            "matched_columns": matched_columns,
+            "analysis_plan": plan,
+        }
+    except Exception as e:
+        logger.error(f"Error processing natural language query: {str(e)}")
+        # Provide a fallback basic analysis plan
+        fallback_plan = {
+            "analysis_type": "summary",
+            "columns_to_use": df_columns[:10],  # Use first 10 columns
+            "parameters": {},
+            "description": "Basic data summary",
+        }
+
+        return {
+            "query": query,
+            "intent_classification": {"primary_intent": "summarize", "confidence": 0.5},
+            "entities": {"prompt": query},
+            "matched_columns": {"metric_columns": df_columns[:5]},
+            "analysis_plan": fallback_plan,
+        }

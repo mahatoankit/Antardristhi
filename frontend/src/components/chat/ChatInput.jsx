@@ -34,7 +34,7 @@ const ChatInput = () => {
     console.log('Active chat:', activeChat);
     console.log('Data file:', dataFile);
     
-    // Add user message to the chat
+    // Create user message
     const userMessage = {
       id: Date.now().toString(),
       role: 'user',
@@ -46,7 +46,7 @@ const ChatInput = () => {
     const messageContent = inputValue;
     
     // Clear input and start loading immediately
-    addMessage(userMessage);
+    addMessage(userMessage); // Add the user message to chat
     setInputValue('');
     setLoading(true);
     
@@ -75,19 +75,22 @@ const ChatInput = () => {
             timestamp: new Date().toISOString(),
           };
           
+          // Add the assistant's response as a new message (doesn't replace user message)
           addMessage(assistantMessage);
           
-          // If there are charts or visualizations, add them as separate messages
+          // If there are charts or visualizations in the response, add them as separate messages
           if (response.data.result.charts && response.data.result.charts.length > 0) {
+            console.log('Adding chart messages:', response.data.result.charts.length);
             response.data.result.charts.forEach((chart) => {
               const chartMessage = {
                 id: Date.now().toString(),
                 role: 'assistant',
                 type: 'chart',
                 content: {
-                  chartData: chart.data,
-                  chartTitle: chart.title,
                   chartType: chart.type,
+                  chartTitle: chart.title,
+                  chartImage: chart.imageData,
+                  chartId: chart.id
                 },
                 timestamp: new Date().toISOString(),
               };
