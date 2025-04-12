@@ -1,4 +1,4 @@
-# DataChat: Interactive Data Analytics Assistant 🤖
+# DataChat: Interactive Data Analytics Assistant
 
 An intelligent data analysis tool that helps non-technical users explore and understand their data through natural language conversations.
 
@@ -15,7 +15,7 @@ An intelligent data analysis tool that helps non-technical users explore and und
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/yourusername/DataChat.git
+git clone https://github.com/mahatoankit/Antardristhi.git
 cd DataChat
 ```
 
@@ -118,9 +118,8 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## Contact 📧
 
-Your Name - [@yourtwitter](https://twitter.com/yourtwitter) - email@example.com
+Your Name - [@yourtwitter](https://twitter.com/mahatoankit) - email@example.com
 
-Project Link: [https://github.com/mahatoankit/antardristhi](https://github.com/yourusername/DataChat)
 
 ## Acknowledgments 🙏
 
