@@ -910,10 +910,11 @@ async def analyze_data_query(
                     f"Received response from Gemini (length: {len(response.text)})"
                 )
                 # Create a result structure similar to what ML engine would return
+                gemini_response_text = response.text.strip()
                 return {
                     "result": {
-                        "explanation": response.text,
-                        "text": response.text,
+                        "explanation": gemini_response_text,
+                        "text": gemini_response_text,
                         "analysis_type": "gemini_direct",
                         "query": query,
                     }
