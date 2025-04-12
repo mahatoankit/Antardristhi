@@ -9,6 +9,8 @@ import base64
 import matplotlib.pyplot as plt
 import seaborn as sns
 from io import BytesIO
+import json
+import traceback
 
 # Import utility modules
 from ..utils.data_preprocessing import (
@@ -58,11 +60,22 @@ class AnalysisEngine:
     Coordinating service for ML-powered data analysis
     """
 
+    # Message type constants for consistent chatbot response format
+    MESSAGE_TYPE_TEXT = "text"
+    MESSAGE_TYPE_CHART = "chart"
+    MESSAGE_TYPE_TABLE = "table"
+    MESSAGE_TYPE_ERROR = "error"
+
     def __init__(self):
         """Initialize the analysis engine"""
         self.preprocessed_data = {}
         self.analysis_results = {}
         self.active_models = {}
+        # Response Message Types
+        self.MESSAGE_TYPE_TEXT = "text"
+        self.MESSAGE_TYPE_CHART = "chart"
+        self.MESSAGE_TYPE_TABLE = "table"
+        self.MESSAGE_TYPE_ERROR = "error"
 
     def preprocess_data(
         self, df: pd.DataFrame, missing_strategy: str = "auto"
@@ -1413,3 +1426,1141 @@ class AnalysisEngine:
         except Exception as e:
             logging.error(f"Error generating auto visualizations: {str(e)}")
             return [{"error": str(e)}]
+
+    def format_table_data(self, df: pd.DataFrame, max_rows: int = 10) -> Dict[str, Any]:
+        """
+        Format dataframe as table data for chatbot display.
+
+        Args:
+            df: DataFrame to format
+            max_rows: Maximum number of rows to include
+
+        Returns:
+            Dictionary with table data in a format suitable for frontend display
+        """
+        try:
+            # Limit number of rows
+            if len(df) > max_rows:
+                display_df = df.head(max_rows)
+            else:
+                display_df = df
+
+            # Convert to table data format
+            columns = display_df.columns.tolist()
+            rows = display_df.to_dict("records")
+
+            # Format any nan values as empty strings
+            for row in rows:
+                for key, value in row.items():
+                    if pd.isna(value):
+                        row[key] = ""
+                    elif isinstance(value, (np.float64, float)):
+                        row[key] = round(value, 4)  # Round floats for better display
+
+            return {
+                "type": self.MESSAGE_TYPE_TABLE,
+                "data": {
+                    "columns": columns,
+                    "rows": rows,
+                    "totalRows": len(df),
+                    "displayedRows": len(display_df),
+                },
+            }
+        except Exception as e:
+            logger.error(f"Error formatting table data: {str(e)}")
+            return {
+                "type": self.MESSAGE_TYPE_ERROR,
+                "data": {"error": f"Error formatting table: {str(e)}"},
+            }
+
+    def format_chart_data(self, visualization: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Format chart data for chatbot display.
+
+        Args:
+            visualization: Dictionary with visualization data (must include 'image' field)
+
+        Returns:
+            Dictionary with chart data in a format suitable for frontend display
+        """
+        try:
+            if "image" not in visualization and "imageData" not in visualization:
+                return {
+                    "type": self.MESSAGE_TYPE_ERROR,
+                    "data": {"error": "Invalid visualization: no image data"},
+                }
+
+            # If imageData is already present, use it directly
+            if "imageData" in visualization:
+                return {
+                    "type": self.MESSAGE_TYPE_CHART,
+                    "data": {
+                        "chartType": visualization.get("type", "unknown"),
+                        "title": visualization.get("title", "Chart"),
+                        "imageData": visualization["imageData"],
+                    },
+                }
+
+            # Otherwise, convert the image to base64
+            return {
+                "type": self.MESSAGE_TYPE_CHART,
+                "data": {
+                    "chartType": visualization.get("type", "unknown"),
+                    "title": visualization.get("title", "Chart"),
+                    "imageData": f"data:image/png;base64,{visualization['image']}",
+                },
+            }
+        except Exception as e:
+            logger.error(f"Error formatting chart data: {str(e)}")
+            return {
+                "type": self.MESSAGE_TYPE_ERROR,
+                "data": {"error": f"Error formatting chart: {str(e)}"},
+            }
+
+    def format_text_response(self, text: str) -> Dict[str, Any]:
+        """
+        Format text response for chatbot display.
+
+        Args:
+            text: Text content
+
+        Returns:
+            Dictionary with text data in a format suitable for frontend display
+        """
+        return {"type": self.MESSAGE_TYPE_TEXT, "data": {"text": text}}
+
+    def format_error_response(self, error: str) -> Dict[str, Any]:
+        """
+        Format error response for chatbot display.
+
+        Args:
+            error: Error message
+
+        Returns:
+            Dictionary with error data in a format suitable for frontend display
+        """
+        return {"type": self.MESSAGE_TYPE_ERROR, "data": {"error": error}}
+
+    def format_complex_response(
+        self, result: Dict[str, Any], query: str
+    ) -> List[Dict[str, Any]]:
+        """
+        Create a complex chat response with multiple message types (text, tables, charts).
+
+        Args:
+            result: Analysis result dictionary
+            query: Original user query
+
+        Returns:
+            List of message objects for the chatbot
+        """
+        try:
+            messages = []
+
+            # Add text explanation if available
+            if "explanation" in result or "text" in result:
+                text = result.get("explanation", result.get("text", ""))
+                messages.append(self.format_text_response(text))
+
+            # Add chart messages if available
+            if "charts" in result and isinstance(result["charts"], list):
+                for chart in result["charts"]:
+                    if "imageData" in chart:
+                        # Chart already in the right format
+                        messages.append(
+                            {"type": self.MESSAGE_TYPE_CHART, "data": chart}
+                        )
+                    elif "image" in chart:
+                        # Convert to the right format
+                        messages.append(self.format_chart_data(chart))
+
+            # Support for visualization in different formats
+            if "visualization" in result and result["visualization"]:
+                if isinstance(result["visualization"], dict):
+                    messages.append(self.format_chart_data(result["visualization"]))
+                elif isinstance(result["visualization"], str) and result[
+                    "visualization"
+                ].startswith("data:image"):
+                    messages.append(
+                        {
+                            "type": self.MESSAGE_TYPE_CHART,
+                            "data": {
+                                "chartType": "generic",
+                                "title": "Visualization",
+                                "imageData": result["visualization"],
+                            },
+                        }
+                    )
+
+            # Add table data if available
+            if "tableData" in result and isinstance(result["tableData"], dict):
+                # Data already formatted for table
+                messages.append(
+                    {"type": self.MESSAGE_TYPE_TABLE, "data": result["tableData"]}
+                )
+            elif "dataframe" in result:
+                # Convert DataFrame to table format
+                try:
+                    df = pd.DataFrame(result["dataframe"])
+                    messages.append(self.format_table_data(df))
+                except Exception as e:
+                    logger.error(f"Error converting dataframe to table: {str(e)}")
+
+            # Add statistics as a table if available and no other tables
+            if (
+                not any(m["type"] == self.MESSAGE_TYPE_TABLE for m in messages)
+                and "statistics" in result
+            ):
+                try:
+                    # Convert statistics to a table
+                    stats_df = pd.DataFrame(result["statistics"])
+                    messages.append(self.format_table_data(stats_df))
+                except Exception as e:
+                    logger.error(f"Error converting statistics to table: {str(e)}")
+
+            # If no messages were added, add a default message
+            if not messages:
+                messages.append(
+                    self.format_text_response(
+                        "I've analyzed your data but couldn't generate a specific response. "
+                        "Try asking more specific questions about your dataset."
+                    )
+                )
+
+            return messages
+        except Exception as e:
+            logger.error(f"Error formatting complex response: {str(e)}")
+            return [self.format_error_response(f"Error processing result: {str(e)}")]
+
+    def analyze_time_series(self, df: pd.DataFrame, prompt: str) -> Dict[str, Any]:
+        """
+        Perform time series analysis on the dataset.
+
+        Args:
+            df: DataFrame containing the dataset
+            prompt: User's natural language prompt
+
+        Returns:
+            Dictionary with time series analysis results
+        """
+        try:
+            # Detect time columns
+            time_columns = detect_time_columns(df)
+            if not time_columns:
+                return {
+                    "error": "No time columns detected in the dataset. Time series analysis requires date or time data."
+                }
+
+            time_col = time_columns[0]  # Use first time column
+
+            # Identify target columns - use numeric columns that aren't time
+            numeric_cols = df.select_dtypes(include=["number"]).columns.tolist()
+            target_cols = [col for col in numeric_cols if col not in time_columns]
+
+            if not target_cols:
+                return {
+                    "error": "No numeric columns found to forecast. Time series analysis requires numeric data."
+                }
+
+            target_col = target_cols[0]  # Use first numeric column by default
+
+            # Look for target column in prompt
+            for col in target_cols:
+                if col.lower() in prompt.lower():
+                    target_col = col
+                    break
+
+            # Prepare time series data
+            ts_data = prepare_time_series_data(df, time_col, target_col)
+
+            # Determine forecast periods based on prompt
+            forecast_periods = 10  # Default
+            period_words = re.findall(r"next\s+(\d+)", prompt.lower())
+            if period_words:
+                try:
+                    forecast_periods = int(period_words[0])
+                except ValueError:
+                    pass
+
+            # Perform forecast
+            forecast_result = auto_forecast(ts_data, forecast_periods)
+
+            # Generate visualization
+            plt.figure(figsize=(10, 6))
+            plt.plot(ts_data.index, ts_data.values, label="Historical")
+            plt.plot(
+                forecast_result["forecast_index"],
+                forecast_result["forecast_values"],
+                label="Forecast",
+                linestyle="--",
+            )
+            plt.title(f"Time Series Forecast of {target_col}")
+            plt.xlabel(time_col)
+            plt.ylabel(target_col)
+            plt.legend()
+            plt.grid(True)
+
+            # Save plot to bytes
+            img_bytes = BytesIO()
+            plt.savefig(img_bytes, format="png")
+            plt.close()
+            img_bytes.seek(0)
+            img_base64 = base64.b64encode(img_bytes.read()).decode("utf-8")
+
+            # Prepare result
+            result = {
+                "analysis_type": "time_series",
+                "target_column": target_col,
+                "time_column": time_col,
+                "forecast_periods": forecast_periods,
+                "forecast": forecast_result["forecast_values"].tolist(),
+                "text": f"I've analyzed the time series data for {target_col} over {time_col} and generated a forecast for the next {forecast_periods} periods.",
+                "charts": [
+                    {
+                        "type": "line",
+                        "title": f"Time Series Forecast of {target_col}",
+                        "image": img_base64,
+                    }
+                ],
+            }
+
+            return result
+
+        except Exception as e:
+            logger.error(f"Error in time series analysis: {str(e)}")
+            return {"error": f"Error in time series analysis: {str(e)}"}
+
+    def analyze_correlations(self, df: pd.DataFrame, prompt: str) -> Dict[str, Any]:
+        """
+        Analyze correlations between variables in the dataset.
+
+        Args:
+            df: DataFrame containing the dataset
+            prompt: User's natural language prompt
+
+        Returns:
+            Dictionary with correlation analysis results
+        """
+        try:
+            # Filter for numeric columns only
+            numeric_df = df.select_dtypes(include=["number"])
+
+            if numeric_df.empty or numeric_df.shape[1] < 2:
+                return {
+                    "error": "Not enough numeric columns for correlation analysis. Need at least 2 numeric columns."
+                }
+
+            # Calculate correlation matrix
+            corr_matrix = numeric_df.corr()
+
+            # Find strongest correlations (positive and negative)
+            strongest_pos = 0
+            strongest_neg = 0
+            pos_cols = ("", "")
+            neg_cols = ("", "")
+
+            for i, col1 in enumerate(corr_matrix.columns):
+                for j, col2 in enumerate(corr_matrix.columns):
+                    if i < j:  # Upper triangle only (avoid duplicates)
+                        corr_val = corr_matrix.loc[col1, col2]
+                        if corr_val > strongest_pos:
+                            strongest_pos = corr_val
+                            pos_cols = (col1, col2)
+                        elif corr_val < strongest_neg:
+                            strongest_neg = corr_val
+                            neg_cols = (col1, col2)
+
+            # Generate scatter plots for the strongest correlations
+            charts = []
+
+            # Positive correlation plot
+            if strongest_pos > 0.1:
+                plt.figure(figsize=(8, 6))
+                plt.scatter(df[pos_cols[0]], df[pos_cols[1]], alpha=0.6)
+                plt.title(
+                    f"Correlation: {pos_cols[0]} vs {pos_cols[1]} (r={strongest_pos:.2f})"
+                )
+                plt.xlabel(pos_cols[0])
+                plt.ylabel(pos_cols[1])
+                plt.grid(True)
+
+                # Save plot to bytes
+                img_bytes = BytesIO()
+                plt.savefig(img_bytes, format="png")
+                plt.close()
+                img_bytes.seek(0)
+                img_base64 = base64.b64encode(img_bytes.read()).decode("utf-8")
+
+                charts.append(
+                    {
+                        "type": "scatter",
+                        "title": f"Positive Correlation: {pos_cols[0]} vs {pos_cols[1]}",
+                        "image": img_base64,
+                    }
+                )
+
+            # Negative correlation plot
+            if strongest_neg < -0.1:
+                plt.figure(figsize=(8, 6))
+                plt.scatter(df[neg_cols[0]], df[neg_cols[1]], alpha=0.6, color="red")
+                plt.title(
+                    f"Correlation: {neg_cols[0]} vs {neg_cols[1]} (r={strongest_neg:.2f})"
+                )
+                plt.xlabel(neg_cols[0])
+                plt.ylabel(neg_cols[1])
+                plt.grid(True)
+
+                # Save plot to bytes
+                img_bytes = BytesIO()
+                plt.savefig(img_bytes, format="png")
+                plt.close()
+                img_bytes.seek(0)
+                img_base64 = base64.b64encode(img_bytes.read()).decode("utf-8")
+
+                charts.append(
+                    {
+                        "type": "scatter",
+                        "title": f"Negative Correlation: {neg_cols[0]} vs {neg_cols[1]}",
+                        "image": img_base64,
+                    }
+                )
+
+            # Heatmap of correlation matrix
+            plt.figure(figsize=(10, 8))
+            mask = np.triu(np.ones_like(corr_matrix, dtype=bool))
+            cmap = sns.diverging_palette(230, 20, as_cmap=True)
+            sns.heatmap(
+                corr_matrix,
+                mask=mask,
+                cmap=cmap,
+                vmax=1,
+                vmin=-1,
+                center=0,
+                square=True,
+                linewidths=0.5,
+                annot=True,
+                fmt=".2f",
+            )
+            plt.title("Correlation Heatmap")
+
+            # Save plot to bytes
+            img_bytes = BytesIO()
+            plt.savefig(img_bytes, format="png")
+            plt.close()
+            img_bytes.seek(0)
+            img_base64 = base64.b64encode(img_bytes.read()).decode("utf-8")
+
+            charts.append(
+                {"type": "heatmap", "title": "Correlation Heatmap", "image": img_base64}
+            )
+
+            # Create table of top correlations
+            top_corrs = []
+            for i, col1 in enumerate(corr_matrix.columns):
+                for j, col2 in enumerate(corr_matrix.columns):
+                    if i < j:  # Upper triangle only
+                        corr_val = corr_matrix.loc[col1, col2]
+                        if abs(corr_val) > 0.3:  # Only include meaningful correlations
+                            top_corrs.append(
+                                {
+                                    "Variable 1": col1,
+                                    "Variable 2": col2,
+                                    "Correlation": corr_val,
+                                }
+                            )
+
+            top_corrs_df = pd.DataFrame(top_corrs).sort_values(
+                "Correlation", key=abs, ascending=False
+            )
+
+            # Create explanation text
+            text = "I've analyzed the correlations between numeric variables in your dataset.\n\n"
+
+            if strongest_pos > 0.7:
+                text += f"There is a strong positive correlation ({strongest_pos:.2f}) between {pos_cols[0]} and {pos_cols[1]}.\n"
+            elif strongest_pos > 0.4:
+                text += f"There is a moderate positive correlation ({strongest_pos:.2f}) between {pos_cols[0]} and {pos_cols[1]}.\n"
+            elif strongest_pos > 0.1:
+                text += f"There is a weak positive correlation ({strongest_pos:.2f}) between {pos_cols[0]} and {pos_cols[1]}.\n"
+
+            if strongest_neg < -0.7:
+                text += f"There is a strong negative correlation ({strongest_neg:.2f}) between {neg_cols[0]} and {neg_cols[1]}.\n"
+            elif strongest_neg < -0.4:
+                text += f"There is a moderate negative correlation ({strongest_neg:.2f}) between {neg_cols[0]} and {neg_cols[1]}.\n"
+            elif strongest_neg < -0.1:
+                text += f"There is a weak negative correlation ({strongest_neg:.2f}) between {neg_cols[0]} and {neg_cols[1]}.\n"
+
+            text += "\nThe correlation heatmap shows relationships between all numeric variables."
+
+            return {
+                "analysis_type": "correlation",
+                "text": text,
+                "charts": charts,
+                "dataframe": (
+                    top_corrs_df.to_dict("records") if not top_corrs_df.empty else None
+                ),
+                "statistics": {"correlation_matrix": corr_matrix.to_dict()},
+            }
+
+        except Exception as e:
+            logger.error(f"Error in correlation analysis: {str(e)}")
+            return {"error": f"Error in correlation analysis: {str(e)}"}
+
+    def analyze_clustering(self, df: pd.DataFrame, prompt: str) -> Dict[str, Any]:
+        """
+        Perform clustering analysis on the dataset.
+
+        Args:
+            df: DataFrame containing the dataset
+            prompt: User's natural language prompt
+
+        Returns:
+            Dictionary with clustering analysis results
+        """
+        try:
+            # Filter for numeric columns only for clustering
+            numeric_df = df.select_dtypes(include=["number"])
+
+            if numeric_df.empty or numeric_df.shape[1] < 2:
+                return {
+                    "error": "Not enough numeric columns for clustering analysis. Need at least 2 numeric features."
+                }
+
+            # Normalize data for clustering
+            normalized_data, scaler = normalize_data(numeric_df)
+
+            # Determine number of clusters based on prompt or auto-detect
+            n_clusters = 3  # Default
+            cluster_words = re.findall(r"(\d+)\s+clusters", prompt.lower())
+            if cluster_words:
+                try:
+                    n_clusters = int(cluster_words[0])
+                except ValueError:
+                    pass
+
+            # Perform clustering
+            clustering_result = segment_with_kmeans(
+                normalized_data, n_clusters=n_clusters
+            )
+
+            # Add cluster labels to original dataframe
+            df_with_clusters = df.copy()
+            df_with_clusters["Cluster"] = clustering_result["labels"]
+
+            # Calculate cluster statistics
+            cluster_stats = []
+            for i in range(n_clusters):
+                cluster_df = df_with_clusters[df_with_clusters["Cluster"] == i]
+                cluster_stat = {
+                    "Cluster": i,
+                    "Size": len(cluster_df),
+                    "Percentage": len(cluster_df) / len(df) * 100,
+                }
+
+                # Add statistics for each numeric column
+                for col in numeric_df.columns:
+                    cluster_stat[f"{col}_mean"] = cluster_df[col].mean()
+
+                cluster_stats.append(cluster_stat)
+
+            cluster_stats_df = pd.DataFrame(cluster_stats)
+
+            # Generate PCA visualization for clusters
+            pca = PCA(n_components=2)
+            pca_result = pca.fit_transform(normalized_data)
+
+            # Plot clusters
+            plt.figure(figsize=(10, 8))
+            colors = [
+                "royalblue",
+                "forestgreen",
+                "firebrick",
+                "darkorange",
+                "purple",
+                "teal",
+                "coral",
+                "gold",
+                "slategray",
+                "deeppink",
+            ]
+
+            for i in range(n_clusters):
+                plt.scatter(
+                    pca_result[clustering_result["labels"] == i, 0],
+                    pca_result[clustering_result["labels"] == i, 1],
+                    s=50,
+                    c=colors[i % len(colors)],
+                    label=f"Cluster {i}",
+                )
+
+            plt.title("Cluster Visualization (PCA)")
+            plt.xlabel("Principal Component 1")
+            plt.ylabel("Principal Component 2")
+            plt.legend()
+            plt.grid(True)
+
+            # Save plot to bytes
+            img_bytes = BytesIO()
+            plt.savefig(img_bytes, format="png")
+            plt.close()
+            img_bytes.seek(0)
+            img_base64 = base64.b64encode(img_bytes.read()).decode("utf-8")
+
+            # Create explanation text
+            text = f"I've segmented your data into {n_clusters} clusters. Here's what I found:\n\n"
+
+            for i, stats in enumerate(cluster_stats):
+                text += f"Cluster {i} contains {stats['Size']} records ({stats['Percentage']:.1f}% of the data).\n"
+
+            text += "\nThe visualization shows the clusters projected onto the first two principal components."
+
+            return {
+                "analysis_type": "clustering",
+                "n_clusters": n_clusters,
+                "text": text,
+                "charts": [
+                    {
+                        "type": "scatter",
+                        "title": "Cluster Visualization (PCA)",
+                        "image": img_base64,
+                    }
+                ],
+                "dataframe": cluster_stats_df.to_dict("records"),
+                "cluster_labels": clustering_result["labels"].tolist(),
+            }
+
+        except Exception as e:
+            logger.error(f"Error in clustering analysis: {str(e)}")
+            return {"error": f"Error in clustering analysis: {str(e)}"}
+
+    def analyze_anomalies(self, df: pd.DataFrame, prompt: str) -> Dict[str, Any]:
+        """
+        Perform anomaly detection on the dataset.
+
+        Args:
+            df: DataFrame containing the dataset
+            prompt: User's natural language prompt
+
+        Returns:
+            Dictionary with anomaly detection results
+        """
+        try:
+            # Filter for numeric columns only for anomaly detection
+            numeric_df = df.select_dtypes(include=["number"])
+
+            if numeric_df.empty:
+                return {"error": "No numeric columns found for anomaly detection."}
+
+            # Auto detect outliers
+            outlier_result = auto_detect_outliers(numeric_df)
+
+            # Add outlier flags to original dataframe
+            df_with_outliers = df.copy()
+            df_with_outliers["is_outlier"] = outlier_result["outlier_indices"]
+
+            # Calculate outlier stats
+            outlier_count = sum(outlier_result["outlier_indices"])
+            outlier_percent = outlier_count / len(df) * 100
+
+            # Get outlier records
+            outliers_df = df_with_outliers[df_with_outliers["is_outlier"] == 1]
+
+            # Generate box plots for key numeric columns
+            charts = []
+            for col in numeric_df.columns[:5]:  # Limit to top 5 columns
+                plt.figure(figsize=(8, 6))
+                sns.boxplot(x=df[col])
+                plt.title(f"Box Plot of {col} showing Outliers")
+                plt.grid(True)
+
+                # Save plot to bytes
+                img_bytes = BytesIO()
+                plt.savefig(img_bytes, format="png")
+                plt.close()
+                img_bytes.seek(0)
+                img_base64 = base64.b64encode(img_bytes.read()).decode("utf-8")
+
+                charts.append(
+                    {
+                        "type": "boxplot",
+                        "title": f"Box Plot of {col}",
+                        "image": img_base64,
+                    }
+                )
+
+            # Create explanation text
+            text = f"I've analyzed your data for anomalies and found {outlier_count} outliers ({outlier_percent:.1f}% of the dataset).\n\n"
+
+            if outlier_count > 0:
+                text += "The boxplot visualizations show the distribution of key variables with outliers."
+                text += "\n\nOutliers are data points that significantly differ from other observations and may represent:"
+                text += "\n- Data entry or measurement errors"
+                text += "\n- Rare events or special cases that should be investigated"
+                text += (
+                    "\n- Potential fraud or unusual behavior depending on your domain"
+                )
+            else:
+                text += "No significant outliers were detected in the dataset."
+
+            return {
+                "analysis_type": "anomaly_detection",
+                "outlier_count": outlier_count,
+                "outlier_percentage": outlier_percent,
+                "text": text,
+                "charts": charts,
+                "dataframe": (
+                    outliers_df.head(10).to_dict("records")
+                    if not outliers_df.empty
+                    else None
+                ),
+            }
+
+        except Exception as e:
+            logger.error(f"Error in anomaly detection: {str(e)}")
+            return {"error": f"Error in anomaly detection: {str(e)}"}
+
+    def generate_visualization(self, df: pd.DataFrame, prompt: str) -> Dict[str, Any]:
+        """
+        Generate visualizations based on the prompt.
+
+        Args:
+            df: DataFrame containing the dataset
+            prompt: User's natural language prompt
+
+        Returns:
+            Dictionary with visualization results
+        """
+        try:
+            # Determine chart type based on prompt
+            chart_type = "bar"  # Default
+
+            if any(
+                word in prompt.lower() for word in ["line", "trend", "time", "series"]
+            ):
+                chart_type = "line"
+            elif any(
+                word in prompt.lower()
+                for word in ["scatter", "correlation", "relationship"]
+            ):
+                chart_type = "scatter"
+            elif any(
+                word in prompt.lower() for word in ["pie", "percentage", "proportion"]
+            ):
+                chart_type = "pie"
+            elif any(word in prompt.lower() for word in ["histogram", "distribution"]):
+                chart_type = "histogram"
+            elif any(word in prompt.lower() for word in ["box", "boxplot", "outlier"]):
+                chart_type = "boxplot"
+            elif any(word in prompt.lower() for word in ["heatmap", "heat", "matrix"]):
+                chart_type = "heatmap"
+
+            # Extract column names from prompt
+            all_columns = df.columns.tolist()
+            mentioned_columns = [
+                col for col in all_columns if col.lower() in prompt.lower()
+            ]
+
+            # Prioritize columns by type
+            numeric_cols = df.select_dtypes(include=["number"]).columns.tolist()
+            categorical_cols = df.select_dtypes(
+                include=["object", "category"]
+            ).columns.tolist()
+            time_cols = detect_time_columns(df)
+
+            # Generate the specified chart
+            if chart_type == "bar":
+                # Bar chart needs categorical (x) and numeric (y) columns
+                x_col = None
+                y_col = None
+
+                if mentioned_columns:
+                    for col in mentioned_columns:
+                        if col in categorical_cols and x_col is None:
+                            x_col = col
+                        elif col in numeric_cols and y_col is None:
+                            y_col = col
+
+                # If no suitable columns mentioned, use defaults
+                if x_col is None and categorical_cols:
+                    x_col = categorical_cols[0]
+                if y_col is None and numeric_cols:
+                    y_col = numeric_cols[0]
+
+                if x_col and y_col:
+                    plt.figure(figsize=(10, 6))
+                    df.groupby(x_col)[y_col].mean().sort_values(ascending=False).plot(
+                        kind="bar"
+                    )
+                    plt.title(f"Average {y_col} by {x_col}")
+                    plt.xlabel(x_col)
+                    plt.ylabel(f"Average {y_col}")
+                    plt.grid(True)
+                else:
+                    return {"error": "Could not find suitable columns for a bar chart."}
+
+            elif chart_type == "line":
+                # Line chart works best with time series data
+                x_col = None
+                y_col = None
+
+                if mentioned_columns:
+                    for col in mentioned_columns:
+                        if col in time_cols and x_col is None:
+                            x_col = col
+                        elif col in numeric_cols and y_col is None:
+                            y_col = col
+
+                # If no suitable columns mentioned, use defaults
+                if x_col is None:
+                    if time_cols:
+                        x_col = time_cols[0]
+                    elif categorical_cols:
+                        x_col = categorical_cols[0]
+                    elif len(numeric_cols) > 1:
+                        x_col = numeric_cols[0]
+
+                if y_col is None and numeric_cols:
+                    y_col = (
+                        numeric_cols[0]
+                        if x_col != numeric_cols[0] and numeric_cols
+                        else numeric_cols[1] if len(numeric_cols) > 1 else None
+                    )
+
+                if x_col and y_col:
+                    plt.figure(figsize=(10, 6))
+                    if x_col in time_cols:
+                        # Make sure time column is properly formatted
+                        df_sorted = df.sort_values(by=x_col)
+                        plt.plot(df_sorted[x_col], df_sorted[y_col])
+                    else:
+                        df.groupby(x_col)[y_col].mean().plot(kind="line")
+                    plt.title(f"{y_col} over {x_col}")
+                    plt.xlabel(x_col)
+                    plt.ylabel(y_col)
+                    plt.grid(True)
+                else:
+                    return {
+                        "error": "Could not find suitable columns for a line chart."
+                    }
+
+            elif chart_type == "scatter":
+                # Scatter plot needs two numeric columns
+                x_col = None
+                y_col = None
+
+                if mentioned_columns:
+                    numeric_mentioned = [
+                        col for col in mentioned_columns if col in numeric_cols
+                    ]
+                    if len(numeric_mentioned) >= 2:
+                        x_col = numeric_mentioned[0]
+                        y_col = numeric_mentioned[1]
+
+                # If no suitable columns mentioned, use defaults
+                if x_col is None or y_col is None:
+                    if len(numeric_cols) >= 2:
+                        x_col = numeric_cols[0]
+                        y_col = numeric_cols[1]
+                    else:
+                        return {
+                            "error": "Not enough numeric columns for a scatter plot."
+                        }
+
+                plt.figure(figsize=(10, 6))
+                plt.scatter(df[x_col], df[y_col], alpha=0.6)
+                plt.title(f"Relationship between {x_col} and {y_col}")
+                plt.xlabel(x_col)
+                plt.ylabel(y_col)
+                plt.grid(True)
+
+            elif chart_type == "pie":
+                # Pie chart works with categorical data
+                col = None
+
+                if mentioned_columns:
+                    for c in mentioned_columns:
+                        if c in categorical_cols:
+                            col = c
+                            break
+
+                # If no suitable column mentioned, use default
+                if col is None and categorical_cols:
+                    col = categorical_cols[0]
+
+                if col:
+                    plt.figure(figsize=(10, 6))
+                    df[col].value_counts().head(10).plot(kind="pie", autopct="%1.1f%%")
+                    plt.title(f"Distribution of {col}")
+                    plt.ylabel("")  # Hide ylabel
+                else:
+                    return {
+                        "error": "Could not find a suitable categorical column for a pie chart."
+                    }
+
+            elif chart_type == "histogram":
+                # Histogram works with numeric data
+                col = None
+
+                if mentioned_columns:
+                    for c in mentioned_columns:
+                        if c in numeric_cols:
+                            col = c
+                            break
+
+                # If no suitable column mentioned, use default
+                if col is None and numeric_cols:
+                    col = numeric_cols[0]
+
+                if col:
+                    plt.figure(figsize=(10, 6))
+                    sns.histplot(df[col], kde=True)
+                    plt.title(f"Distribution of {col}")
+                    plt.xlabel(col)
+                    plt.grid(True)
+                else:
+                    return {
+                        "error": "Could not find a suitable numeric column for a histogram."
+                    }
+
+            elif chart_type == "boxplot":
+                # Boxplot works with numeric data
+                col = None
+
+                if mentioned_columns:
+                    for c in mentioned_columns:
+                        if c in numeric_cols:
+                            col = c
+                            break
+
+                # If no suitable column mentioned, use default
+                if col is None and numeric_cols:
+                    col = numeric_cols[0]
+
+                if col:
+                    plt.figure(figsize=(10, 6))
+                    sns.boxplot(x=df[col])
+                    plt.title(f"Box Plot of {col}")
+                    plt.grid(True)
+                else:
+                    return {
+                        "error": "Could not find a suitable numeric column for a box plot."
+                    }
+
+            elif chart_type == "heatmap":
+                # Heatmap works with correlation matrix
+                numeric_df = df.select_dtypes(include=["number"])
+
+                if numeric_df.shape[1] < 2:
+                    return {"error": "Not enough numeric columns for a heatmap."}
+
+                plt.figure(figsize=(12, 10))
+                corr_matrix = numeric_df.corr()
+                mask = np.triu(np.ones_like(corr_matrix, dtype=bool))
+                cmap = sns.diverging_palette(230, 20, as_cmap=True)
+
+                sns.heatmap(
+                    corr_matrix,
+                    mask=mask,
+                    cmap=cmap,
+                    vmax=1,
+                    vmin=-1,
+                    center=0,
+                    square=True,
+                    linewidths=0.5,
+                    annot=True,
+                    fmt=".2f",
+                )
+                plt.title("Correlation Heatmap")
+
+            # Save plot to bytes
+            img_bytes = BytesIO()
+            plt.savefig(img_bytes, format="png")
+            plt.close()
+            img_bytes.seek(0)
+            img_base64 = base64.b64encode(img_bytes.read()).decode("utf-8")
+
+            # Create explanation text
+            text = f"I've created a {chart_type} chart based on your request. "
+
+            if chart_type == "bar":
+                text += f"This shows the average {y_col} for each {x_col} category."
+            elif chart_type == "line":
+                text += f"This shows how {y_col} changes over {x_col}."
+            elif chart_type == "scatter":
+                text += f"This shows the relationship between {x_col} and {y_col}."
+            elif chart_type == "pie":
+                text += f"This shows the distribution of {col} categories."
+            elif chart_type == "histogram":
+                text += f"This shows the distribution of {col} values."
+            elif chart_type == "boxplot":
+                text += f"This shows the distribution and potential outliers in {col}."
+            elif chart_type == "heatmap":
+                text += "This shows the correlation between all numeric variables in your dataset."
+
+            return {
+                "analysis_type": "visualization",
+                "chart_type": chart_type,
+                "text": text,
+                "charts": [
+                    {
+                        "type": chart_type,
+                        "title": f"{chart_type.capitalize()} Chart",
+                        "image": img_base64,
+                    }
+                ],
+            }
+
+        except Exception as e:
+            logger.error(f"Error generating visualization: {str(e)}")
+            return {"error": f"Error generating visualization: {str(e)}"}
+
+    def general_analysis(self, df: pd.DataFrame, prompt: str) -> Dict[str, Any]:
+        """
+        Perform general analysis on the dataset based on the prompt.
+
+        Args:
+            df: DataFrame containing the dataset
+            prompt: User's natural language prompt
+
+        Returns:
+            Dictionary with general analysis results
+        """
+        try:
+            # Detect column types
+            column_types = {}
+            column_types["numeric"] = df.select_dtypes(
+                include=["number"]
+            ).columns.tolist()
+            column_types["categorical"] = df.select_dtypes(
+                include=["object", "category"]
+            ).columns.tolist()
+            column_types["time"] = detect_time_columns(df)
+
+            # Generate overall statistics
+            stats = {
+                "rows": df.shape[0],
+                "columns": df.shape[1],
+                "missing_values": df.isnull().sum().sum(),
+                "column_types": {
+                    "numeric": len(column_types["numeric"]),
+                    "categorical": len(column_types["categorical"]),
+                    "time": len(column_types["time"]),
+                },
+            }
+
+            # Generate dataset summary
+            summary = {}
+
+            # Summary for numeric columns
+            for col in column_types["numeric"][:5]:  # Limit to 5 columns
+                summary[col] = {
+                    "mean": df[col].mean(),
+                    "median": df[col].median(),
+                    "min": df[col].min(),
+                    "max": df[col].max(),
+                    "std": df[col].std(),
+                }
+
+            # Summary for categorical columns
+            for col in column_types["categorical"][:5]:  # Limit to 5 columns
+                value_counts = df[col].value_counts().head(5).to_dict()
+                summary[col] = {
+                    "unique_values": df[col].nunique(),
+                    "top_values": value_counts,
+                }
+
+            # Generate appropriate visualizations
+            charts = []
+
+            # If we have numeric columns, show distribution of first numeric column
+            if column_types["numeric"]:
+                col = column_types["numeric"][0]
+                plt.figure(figsize=(10, 6))
+                sns.histplot(df[col], kde=True)
+                plt.title(f"Distribution of {col}")
+                plt.xlabel(col)
+                plt.grid(True)
+
+                # Save plot to bytes
+                img_bytes = BytesIO()
+                plt.savefig(img_bytes, format="png")
+                plt.close()
+                img_bytes.seek(0)
+                img_base64 = base64.b64encode(img_bytes.read()).decode("utf-8")
+
+                charts.append(
+                    {
+                        "type": "histogram",
+                        "title": f"Distribution of {col}",
+                        "image": img_base64,
+                    }
+                )
+
+            # If we have categorical columns, show top categories
+            if column_types["categorical"]:
+                col = column_types["categorical"][0]
+                plt.figure(figsize=(10, 6))
+                df[col].value_counts().head(10).plot(kind="bar")
+                plt.title(f"Top Categories of {col}")
+                plt.xlabel(col)
+                plt.ylabel("Count")
+                plt.grid(True)
+
+                # Save plot to bytes
+                img_bytes = BytesIO()
+                plt.savefig(img_bytes, format="png")
+                plt.close()
+                img_bytes.seek(0)
+                img_base64 = base64.b64encode(img_bytes.read()).decode("utf-8")
+
+                charts.append(
+                    {
+                        "type": "bar",
+                        "title": f"Top Categories of {col}",
+                        "image": img_base64,
+                    }
+                )
+
+            # If we have time and numeric columns, show time trend
+            if column_types["time"] and column_types["numeric"]:
+                time_col = column_types["time"][0]
+                numeric_col = column_types["numeric"][0]
+
+                plt.figure(figsize=(10, 6))
+                df_sorted = df.sort_values(by=time_col)
+                plt.plot(df_sorted[time_col], df_sorted[numeric_col])
+                plt.title(f"{numeric_col} over Time")
+                plt.xlabel(time_col)
+                plt.ylabel(numeric_col)
+                plt.grid(True)
+
+                # Save plot to bytes
+                img_bytes = BytesIO()
+                plt.savefig(img_bytes, format="png")
+                plt.close()
+                img_bytes.seek(0)
+                img_base64 = base64.b64encode(img_bytes.read()).decode("utf-8")
+
+                charts.append(
+                    {
+                        "type": "line",
+                        "title": f"{numeric_col} over Time",
+                        "image": img_base64,
+                    }
+                )
+
+            # Generate text explanation
+            text = self._generate_data_explanation(df, column_types, prompt)
+
+            return {
+                "analysis_type": "general",
+                "text": text,
+                "statistics": stats,
+                "summary": summary,
+                "charts": charts,
+                "dataframe": df.head(10).to_dict("records"),
+            }
+
+        except Exception as e:
+            logger.error(f"Error in general analysis: {str(e)}")
+            return {"error": f"Error in general analysis: {str(e)}"}

@@ -57,7 +57,7 @@ const MessageList = () => {
         <div className="w-full">
           <h4 className="text-sm font-semibold mb-2">{content.chartTitle || 'Chart'}</h4>
           <img 
-            src={`data:image/png;base64,${content.chartImage}`} 
+            src={content.chartImage.startsWith('data:image') ? content.chartImage : `data:image/png;base64,${content.chartImage}`} 
             alt={content.chartTitle || 'Chart'} 
             className="max-w-full h-auto rounded-md"
           />
@@ -84,7 +84,20 @@ const MessageList = () => {
       // Handle complex object content
       if (content.tableData) {
         return renderTable(content);
-      } else if (content.chartData || content.chartImage) {
+      } else if (content.chartData || content.chartImage || content.imageData) {
+        // Support both chartImage and the new imageData field
+        if (content.imageData) {
+          return (
+            <div className="w-full">
+              <h4 className="text-sm font-semibold mb-2">{content.chartTitle || content.title || 'Visualization'}</h4>
+              <img 
+                src={content.imageData} 
+                alt={content.chartTitle || content.title || 'Visualization'} 
+                className="max-w-full h-auto rounded-md shadow-sm border border-gray-200"
+              />
+            </div>
+          );
+        }
         return renderChart(content);
       } else if (content.text || content.explanation) {
         // Handle text/explanation content

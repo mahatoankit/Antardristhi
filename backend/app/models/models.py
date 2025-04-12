@@ -118,7 +118,9 @@ class Chat(Base):
 
     # Relationships
     user = relationship("User", back_populates="chats")
-    messages = relationship("ChatMessage", back_populates="chat")
+    messages = relationship(
+        "ChatMessage", back_populates="chat", cascade="all, delete-orphan"
+    )
 
 
 class ChatMessage(Base):
@@ -126,10 +128,25 @@ class ChatMessage(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     chat_id = Column(Integer, ForeignKey("chats.id"))
-    content = Column(Text)
-    is_user = Column(Boolean, default=True)
-    data_reference_id = Column(Integer, ForeignKey("data_uploads.id"), nullable=True)
-    analysis_reference_id = Column(Integer, ForeignKey("analyses.id"), nullable=True)
+    content = Column(Text)  # Text representation of the message
+    content_json = Column(
+        JSON, nullable=True
+    )  # Structured content for rich messages (images, tables)
+    image_data = Column(
+        Text, nullable=True
+    )  # Base64 encoded image data for visualizations
+    message_type = Column(
+        String(50), default="text"
+    )  # Type of message: text, chart, image, table, error
+    is_user = Column(
+        Boolean, default=True
+    )  # True for user messages, False for assistant responses
+    data_reference_id = Column(
+        String(255), nullable=True
+    )  # Reference to data being analyzed
+    analysis_reference_id = Column(
+        String(255), nullable=True
+    )  # Reference to analysis performed
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     # Relationships

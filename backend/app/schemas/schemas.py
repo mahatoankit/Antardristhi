@@ -1,6 +1,7 @@
 from pydantic import BaseModel, EmailStr, Field
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Union
 from datetime import datetime
+from enum import Enum
 
 
 # User schemas
@@ -146,12 +147,74 @@ class Chat(ChatBase):
         from_attributes = True
 
 
-# Chat Message schemas
+# Chat Message Content schemas
+class MessageType(str, Enum):
+    TEXT = "text"
+    CHART = "chart"
+    TABLE = "table"
+    ERROR = "error"
+
+
+class ChatMessageContent(BaseModel):
+    """Base model for different types of chat message content"""
+
+    type: MessageType
+
+
+class TextMessageContent(ChatMessageContent):
+    """Text message content model"""
+
+    type: MessageType = MessageType.TEXT
+    data: Dict[str, Any] = Field(..., example={"text": "This is a text message"})
+
+
+class TableMessageContent(ChatMessageContent):
+    """Table message content model"""
+
+    type: MessageType = MessageType.TABLE
+    data: Dict[str, Any] = Field(
+        ...,
+        example={
+            "columns": ["col1", "col2"],
+            "rows": [{"col1": "val1", "col2": "val2"}],
+            "totalRows": 10,
+            "displayedRows": 5,
+        },
+    )
+
+
+class ChartMessageContent(ChatMessageContent):
+    """Chart message content model"""
+
+    type: MessageType = MessageType.CHART
+    data: Dict[str, Any] = Field(
+        ...,
+        example={
+            "chartType": "bar",
+            "title": "Sample Chart",
+            "imageData": "data:image/png;base64,...",
+        },
+    )
+
+
+class ErrorMessageContent(ChatMessageContent):
+    """Error message content model"""
+
+    type: MessageType = MessageType.ERROR
+    data: Dict[str, Any] = Field(..., example={"error": "An error occurred"})
+
+
+# Updated Chat Message schemas
 class ChatMessageBase(BaseModel):
+    """Base model for chat messages"""
+
     content: str
     is_user: bool = True
-    data_reference_id: Optional[int] = None
-    analysis_reference_id: Optional[int] = None
+    data_reference_id: Optional[str] = None
+    analysis_reference_id: Optional[str] = None
+    message_type: Optional[str] = "text"
+    image_data: Optional[str] = None
+    content_json: Optional[dict] = None
 
 
 class ChatMessageCreate(ChatMessageBase):
@@ -164,7 +227,7 @@ class ChatMessage(ChatMessageBase):
     created_at: datetime
 
     class Config:
-        from_attributes = True
+        orm_mode = True
 
 
 # Analysis Request schemas

@@ -660,16 +660,16 @@ def get_chat_messages(
 )
 def create_chat_message(
     chat_id: int,
-    message: dict,  # Changed from schemas.ChatMessageCreate to dict
+    message: dict,  # Using dict for flexibility
     db: Session = Depends(get_db),
     current_user: schemas.User = Depends(get_current_user),
 ):
-    """Add a message to a chat"""
+    """Add a message to a chat and generate an AI response"""
     chat = user_crud.get_chat(db, chat_id=chat_id)
     if not chat or chat.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Chat not found")
 
-    # Create a proper ChatMessageCreate object with all required fields
+    # Create a proper ChatMessageCreate object with all required fields for the user message
     message_data = {
         "content": message.get("content", ""),
         "is_user": True,
@@ -678,25 +678,187 @@ def create_chat_message(
         "analysis_reference_id": message.get("analysis_reference_id"),
     }
 
-    # Create the message in the database
+    # Create the user message in the database
     user_message = user_crud.create_chat_message(
         db, schemas.ChatMessageCreate(**message_data)
     )
 
-    # Generate an AI response (simple echo for now)
-    response_data = {
-        "content": f"You said: {message.get('content', '')}",
-        "is_user": False,
-        "chat_id": chat_id,
-    }
-
-    # Create the assistant message
-    assistant_message = user_crud.create_chat_message(
-        db, schemas.ChatMessageCreate(**response_data)
+    # Generate AI response
+    ai_response = generate_ai_response(
+        message.get("content"), message.get("data_reference_id"), db
     )
 
-    # Return the user message (the frontend will handle the assistant message)
+    # Create AI message in the database
+    ai_message_data = {
+        "content": (
+            json.dumps(ai_response)
+            if isinstance(ai_response, (dict, list))
+            else ai_response
+        ),
+        "is_user": False,
+        "chat_id": chat_id,
+        "data_reference_id": message.get("data_reference_id"),
+        "analysis_reference_id": message.get("analysis_reference_id"),
+    }
+
+    # Ensure proper image data format for visualizations
+    # If the response contains charts with image data, ensure they're properly formatted
+    if isinstance(ai_response, dict) and "result" in ai_response:
+        if "charts" in ai_response["result"]:
+            for chart in ai_response["result"]["charts"]:
+                # Ensure image data is properly formatted for frontend display
+                if "imageData" in chart and chart["imageData"].startswith(
+                    "data:image/"
+                ):
+                    # Already properly formatted, leave as is
+                    pass
+                elif "image" in chart:
+                    # Convert raw base64 to proper format if needed
+                    chart["imageData"] = f"data:image/png;base64,{chart['image']}"
+                    # Remove the original image field to avoid duplication
+                    if "image" in chart:
+                        del chart["image"]
+
+    ai_message = user_crud.create_chat_message(
+        db, schemas.ChatMessageCreate(**ai_message_data)
+    )
+
     return user_message
+
+
+def generate_ai_response(
+    prompt: str, data_id: Optional[str] = None, db: Session = None
+) -> Any:
+    """
+    Generate an AI response based on the user prompt and data (if provided).
+
+    This function coordinates the AI response generation process by:
+    1. Analyzing the user's prompt to understand the request
+    2. Retrieving the relevant data if a data_id is provided
+    3. Performing appropriate analyses based on the prompt
+    4. Generating a structured response with text, visualizations, and/or tables
+
+    Args:
+        prompt: The user's message/query
+        data_id: Optional ID reference to a dataset the user is working with
+        db: Database session
+
+    Returns:
+        A structured response object containing message components (text, charts, tables)
+    """
+    try:
+        # Initialize analysis engine if not already done
+        analysis_engine = AnalysisEngine()
+
+        # If no data is provided, just return a text response
+        if not data_id:
+            return {
+                "type": "text",
+                "data": {
+                    "text": f"I can help you analyze data. Please upload a dataset or specify which dataset you want to analyze."
+                },
+            }
+
+        # Find the data upload referenced by data_id
+        if db:
+            try:
+                data_id_int = int(data_id)
+                data_upload = (
+                    db.query(DataUpload).filter(DataUpload.id == data_id_int).first()
+                )
+                if not data_upload:
+                    return {
+                        "type": "error",
+                        "data": {
+                            "error": f"Could not find dataset with ID {data_id}. Please upload a dataset first."
+                        },
+                    }
+                file_path = data_upload.file_path
+            except (ValueError, TypeError):
+                return {
+                    "type": "error",
+                    "data": {"error": f"Invalid data ID format: {data_id}"},
+                }
+        else:
+            # Mock data for testing without DB
+            file_path = f"./cache/data/{data_id}.csv"
+
+        # Load the dataset
+        try:
+            if file_path.endswith(".csv"):
+                df = pd.read_csv(file_path)
+            elif file_path.endswith((".xls", ".xlsx")):
+                df = pd.read_excel(file_path)
+            else:
+                return {
+                    "type": "error",
+                    "data": {
+                        "error": f"Unsupported file format. Please upload a CSV or Excel file."
+                    },
+                }
+        except Exception as e:
+            return {"type": "error", "data": {"error": f"Error loading data: {str(e)}"}}
+
+        # Analyze the prompt to determine what analysis to perform
+        # This is a simplified version - in practice, you'd use NLP to classify the query
+        analysis_type = "general"
+        if any(
+            word in prompt.lower()
+            for word in ["predict", "forecast", "future", "trend"]
+        ):
+            analysis_type = "time_series"
+        elif any(
+            word in prompt.lower()
+            for word in ["group", "segment", "cluster", "similar"]
+        ):
+            analysis_type = "clustering"
+        elif any(
+            word in prompt.lower()
+            for word in ["anomaly", "outlier", "unusual", "suspicious"]
+        ):
+            analysis_type = "anomaly_detection"
+        elif any(
+            word in prompt.lower()
+            for word in ["correlate", "relationship", "impact", "affect"]
+        ):
+            analysis_type = "correlation"
+        elif any(
+            word in prompt.lower() for word in ["visualize", "plot", "chart", "graph"]
+        ):
+            analysis_type = "visualization"
+
+        # Perform the analysis
+        try:
+            if analysis_type == "time_series":
+                result = analysis_engine.analyze_time_series(df, prompt)
+            elif analysis_type == "clustering":
+                result = analysis_engine.analyze_clustering(df, prompt)
+            elif analysis_type == "anomaly_detection":
+                result = analysis_engine.analyze_anomalies(df, prompt)
+            elif analysis_type == "correlation":
+                result = analysis_engine.analyze_correlations(df, prompt)
+            elif analysis_type == "visualization":
+                result = analysis_engine.generate_visualization(df, prompt)
+            else:
+                # General analysis
+                result = analysis_engine.general_analysis(df, prompt)
+
+            # Format the response with appropriate message types
+            return analysis_engine.format_complex_response(result, prompt)
+
+        except Exception as e:
+            logger.error(f"Error in analysis: {str(e)}")
+            return {
+                "type": "error",
+                "data": {"error": f"Error analyzing data: {str(e)}"},
+            }
+
+    except Exception as e:
+        logger.error(f"Error in AI response generation: {str(e)}")
+        return {
+            "type": "error",
+            "data": {"error": f"Error generating response: {str(e)}"},
+        }
 
 
 @app.get("/analysis/suggested-questions", tags=["ML Analysis"])
