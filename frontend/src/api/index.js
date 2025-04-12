@@ -108,7 +108,7 @@ export const analysisApi = {
       if (!data || !data.ml_preprocessing) {
         console.error('Missing ml_preprocessing in response:', data);
         // Create a compatible format to prevent the error
-        return {
+        data = {
           ...data,
           ml_preprocessing: {
             data_id: 'placeholder-' + Date.now(),
@@ -117,15 +117,18 @@ export const analysisApi = {
         };
       }
       
-      return data;
+      // Wrap the response in a data object to match expected structure in components
+      return { data };
     })
     .catch(error => {
       console.error('Upload error:', error);
       // Return a compatible object to prevent undefined errors
-      return {
-        error: error.message,
-        ml_preprocessing: {
-          data_id: 'error-' + Date.now()
+      return { 
+        data: {
+          error: error.message,
+          ml_preprocessing: {
+            data_id: 'error-' + Date.now()
+          }
         }
       };
     });
