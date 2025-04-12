@@ -13,6 +13,7 @@ export const ChatProvider = ({ children }) => {
   const [dataFile, setDataFile] = useState(null);
   const [suggestedQuestions, setSuggestedQuestions] = useState([]);
   const [analysisResults, setAnalysisResults] = useState(null);
+  const [lastQuery, setLastQuery] = useState(''); // Add state for the last query
   
   // Load chat history from localStorage when component mounts or user changes
   useEffect(() => {
@@ -189,6 +190,25 @@ export const ChatProvider = ({ children }) => {
       setActiveChat(updatedChat);
     }
   };
+
+  // Set the last query for reference
+  const setCurrentQuery = (query) => {
+    setLastQuery(query);
+    
+    // Update the last query in the active chat
+    if (activeChat) {
+      const updatedChat = { ...activeChat, lastQuery: query };
+      const updatedChats = chats.map(chat => {
+        if (chat.id === activeChat.id) {
+          return updatedChat;
+        }
+        return chat;
+      });
+      
+      setChats(updatedChats);
+      setActiveChat(updatedChat);
+    }
+  };
   
   // Context value
   const value = {
@@ -199,6 +219,7 @@ export const ChatProvider = ({ children }) => {
     dataFile,
     suggestedQuestions,
     analysisResults,
+    lastQuery, // Add lastQuery to the context
     setLoading,
     createNewChat,
     switchChat,
@@ -208,6 +229,7 @@ export const ChatProvider = ({ children }) => {
     setCurrentDataFile,
     setCurrentSuggestedQuestions,
     setCurrentAnalysisResults,
+    setCurrentQuery, // Add the new function to the context
   };
   
   return <ChatContext.Provider value={value}>{children}</ChatContext.Provider>;

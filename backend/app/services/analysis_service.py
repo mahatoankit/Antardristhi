@@ -157,7 +157,9 @@ class AnalysisEngine:
             elif dataset_type == "numeric":
                 result = self._analyze_numeric_data(df, column_types["numeric"], prompt)
             elif dataset_type == "categorical":
-                result = self._analyze_categorical_data(df, column_types["categorical"], prompt)
+                result = self._analyze_categorical_data(
+                    df, column_types["categorical"], prompt
+                )
             else:
                 result = self._analyze_mixed_data(df, column_types, prompt)
 
@@ -196,7 +198,9 @@ class AnalysisEngine:
 
         # Include explanation if available
         if "explanation" in result:
-            response += f"Here is the analysis based on your request: {result['explanation']}\n"
+            response += (
+                f"Here is the analysis based on your request: {result['explanation']}\n"
+            )
 
         # Include statistics if available
         if "statistics" in result:
@@ -479,7 +483,9 @@ class AnalysisEngine:
         """
         missing_values = df.isnull().sum().to_dict()
         total_missing = sum(missing_values.values())
-        missing_percentage = {col: (count / len(df)) * 100 for col, count in missing_values.items()}
+        missing_percentage = {
+            col: (count / len(df)) * 100 for col, count in missing_values.items()
+        }
 
         return {
             "total_missing": total_missing,
@@ -850,8 +856,8 @@ class AnalysisEngine:
 
             # Generate chat-friendly response
             chat_response = (
-                "Here are some questions you can ask about your dataset:\n" +
-                "\n".join(f"- {q}" for q in questions)
+                "Here are some questions you can ask about your dataset:\n"
+                + "\n".join(f"- {q}" for q in questions)
             )
 
             return {"questions": questions, "chat_response": chat_response}
@@ -860,7 +866,9 @@ class AnalysisEngine:
             logger.error(f"Error suggesting questions: {str(e)}")
             return {"error": str(e)}
 
-    def generate_visualizations(self, df: pd.DataFrame, column_types: Dict[str, List[str]]) -> Dict[str, Any]:
+    def generate_visualizations(
+        self, df: pd.DataFrame, column_types: Dict[str, List[str]]
+    ) -> Dict[str, Any]:
         """
         Generate visualizations based on the dataset.
 
@@ -879,7 +887,9 @@ class AnalysisEngine:
 
         # Generate bar charts for categorical columns
         for col in column_types["categorical"]:
-            visualizations[f"bar_chart_{col}"] = df[col].value_counts().plot(kind="bar").get_figure()
+            visualizations[f"bar_chart_{col}"] = (
+                df[col].value_counts().plot(kind="bar").get_figure()
+            )
 
         return visualizations
 
@@ -913,7 +923,9 @@ class AnalysisEngine:
                 sns.lineplot(data=df, x=x_col, y=y_col)
                 plt.title(f"Line Plot of {x_col} vs {y_col}")
             elif chart_type == "bar":
-                sns.barplot(x=df[x_col].value_counts().index, y=df[x_col].value_counts().values)
+                sns.barplot(
+                    x=df[x_col].value_counts().index, y=df[x_col].value_counts().values
+                )
                 plt.title(f"Bar Chart of {x_col}")
             else:
                 return {"error": f"Unsupported chart type: {chart_type}"}
@@ -931,7 +943,9 @@ class AnalysisEngine:
             logger.error(f"Error generating custom visualization: {str(e)}")
             return {"error": str(e)}
 
-    def _analyze_time_series(self, df: pd.DataFrame, time_columns: List[str], prompt: str) -> Dict[str, Any]:
+    def _analyze_time_series(
+        self, df: pd.DataFrame, time_columns: List[str], prompt: str
+    ) -> Dict[str, Any]:
         """
         Perform time series analysis on the dataset.
 
@@ -952,7 +966,9 @@ class AnalysisEngine:
             logger.error(f"Error in time series analysis: {str(e)}")
             return {"error": str(e)}
 
-    def _analyze_categorical_data(self, df: pd.DataFrame, categorical_columns: List[str], prompt: str) -> Dict[str, Any]:
+    def _analyze_categorical_data(
+        self, df: pd.DataFrame, categorical_columns: List[str], prompt: str
+    ) -> Dict[str, Any]:
         """
         Perform analysis on categorical data.
 
@@ -965,7 +981,9 @@ class AnalysisEngine:
             Dictionary with categorical analysis results
         """
         try:
-            category_counts = {col: df[col].value_counts().to_dict() for col in categorical_columns}
+            category_counts = {
+                col: df[col].value_counts().to_dict() for col in categorical_columns
+            }
             return {"category_counts": category_counts}
         except Exception as e:
             logger.error(f"Error in categorical data analysis: {str(e)}")
@@ -983,8 +1001,14 @@ class AnalysisEngine:
         """
         column_types = {
             "numeric": df.select_dtypes(include=["float64", "int64"]).columns.tolist(),
-            "categorical": df.select_dtypes(include=["object", "category"]).columns.tolist(),
-            "time": [col for col in df.columns if pd.api.types.is_datetime64_any_dtype(df[col])],
+            "categorical": df.select_dtypes(
+                include=["object", "category"]
+            ).columns.tolist(),
+            "time": [
+                col
+                for col in df.columns
+                if pd.api.types.is_datetime64_any_dtype(df[col])
+            ],
         }
 
         dataset_type = "mixed"
@@ -996,3 +1020,396 @@ class AnalysisEngine:
             dataset_type = "categorical"
 
         return {"dataset_type": dataset_type, "column_types": column_types}
+
+    def _analyze_numeric_data(
+        self, df: pd.DataFrame, numeric_columns: List[str], prompt: str
+    ) -> Dict[str, Any]:
+        """
+        Perform analysis on numeric data.
+
+        Args:
+            df: DataFrame containing the dataset
+            numeric_columns: List of numeric columns
+            prompt: User's natural language prompt
+
+        Returns:
+            Dictionary with numeric analysis results
+        """
+        try:
+            # Basic statistics
+            stats = df[numeric_columns].describe().to_dict()
+
+            # Calculate correlations if we have multiple numeric columns
+            correlations = {}
+            if len(numeric_columns) > 1:
+                correlations = df[numeric_columns].corr().to_dict()
+
+            # Identify potential outliers using z-score
+            outliers = {}
+            for col in numeric_columns:
+                if df[col].std() > 0:  # Avoid division by zero
+                    z_scores = (df[col] - df[col].mean()) / df[col].std()
+                    outliers[col] = (z_scores.abs() > 3).sum()
+                else:
+                    outliers[col] = 0
+
+            return {
+                "statistics": stats,
+                "correlations": correlations,
+                "outliers": outliers,
+                "analysis_type": "numeric",
+            }
+        except Exception as e:
+            logging.error(f"Error in numeric data analysis: {str(e)}")
+            return {"error": str(e)}
+
+    def _analyze_mixed_data(
+        self, df: pd.DataFrame, column_types: Dict[str, List[str]], prompt: str
+    ) -> Dict[str, Any]:
+        """
+        Perform analysis on mixed data types.
+
+        Args:
+            df: DataFrame containing the dataset
+            column_types: Dictionary of column types
+            prompt: User's natural language prompt
+
+        Returns:
+            Dictionary with mixed analysis results
+        """
+        try:
+            result = {"analysis_type": "mixed", "statistics": {}}
+
+            # Analyze numeric columns
+            if column_types.get("numeric"):
+                numeric_analysis = self._analyze_numeric_data(
+                    df, column_types["numeric"], prompt
+                )
+                if "error" not in numeric_analysis:
+                    result["numeric_analysis"] = numeric_analysis
+
+            # Analyze categorical columns
+            if column_types.get("categorical"):
+                categorical_analysis = self._analyze_categorical_data(
+                    df, column_types["categorical"], prompt
+                )
+                if "error" not in categorical_analysis:
+                    result["categorical_analysis"] = categorical_analysis
+
+            # Basic dataset statistics
+            result["statistics"] = {
+                "row_count": df.shape[0],
+                "column_count": df.shape[1],
+                "missing_values": df.isnull().sum().to_dict(),
+            }
+
+            # Generate a text explanation of the data
+            explanation = self._generate_data_explanation(df, column_types, prompt)
+            result["text"] = explanation
+            result["explanation"] = explanation
+
+            return result
+        except Exception as e:
+            logging.error(f"Error in mixed data analysis: {str(e)}")
+            return {"error": str(e)}
+
+    def _generate_data_explanation(
+        self, df: pd.DataFrame, column_types: Dict[str, List[str]], prompt: str
+    ) -> str:
+        """
+        Generate a human-readable explanation of the data analysis.
+
+        Args:
+            df: DataFrame containing the dataset
+            column_types: Dictionary of column types
+            prompt: User's natural language prompt
+
+        Returns:
+            A string explanation of the data
+        """
+        try:
+            # Create a basic explanation
+            explanation = (
+                f"This dataset contains {df.shape[0]} rows and {df.shape[1]} columns. "
+            )
+
+            # Add information about numeric columns
+            if column_types.get("numeric"):
+                explanation += (
+                    f"There are {len(column_types['numeric'])} numeric columns. "
+                )
+
+                # Add some basic statistics for key numeric columns (up to 3)
+                for i, col in enumerate(column_types["numeric"][:3]):
+                    explanation += (
+                        f"The column '{col}' has a mean of {df[col].mean():.2f} "
+                    )
+                    explanation += (
+                        f"and ranges from {df[col].min():.2f} to {df[col].max():.2f}. "
+                    )
+
+            # Add information about categorical columns
+            if column_types.get("categorical"):
+                explanation += f"There are {len(column_types['categorical'])} categorical columns. "
+
+                # Add some information about categories for key categorical columns (up to 2)
+                for i, col in enumerate(column_types["categorical"][:2]):
+                    unique_vals = df[col].nunique()
+                    explanation += (
+                        f"The column '{col}' has {unique_vals} unique values. "
+                    )
+
+                    # If there are a reasonable number of categories, list the most common ones
+                    if unique_vals <= 10:
+                        top_cats = df[col].value_counts().head(3)
+                        explanation += f"The most common values are {', '.join([f'{cat} ({count})' for cat, count in top_cats.items()])}. "
+
+            # Add information about missing values
+            missing = df.isnull().sum().sum()
+            if missing > 0:
+                explanation += f"There are {missing} missing values in the dataset. "
+                cols_with_missing = df.columns[df.isnull().any()].tolist()
+                explanation += (
+                    f"Columns with missing values: {', '.join(cols_with_missing)}. "
+                )
+            else:
+                explanation += "The dataset has no missing values. "
+
+            # Tailor the explanation based on the prompt
+            prompt_lower = prompt.lower()
+            if "distribution" in prompt_lower or "histogram" in prompt_lower:
+                explanation += self._add_distribution_explanation(df, column_types)
+            elif "correlation" in prompt_lower or "relationship" in prompt_lower:
+                explanation += self._add_correlation_explanation(df, column_types)
+            elif "trend" in prompt_lower or "time" in prompt_lower:
+                explanation += self._add_trend_explanation(df, column_types)
+
+            return explanation
+        except Exception as e:
+            logging.error(f"Error generating explanation: {str(e)}")
+            return "I was unable to generate a detailed explanation due to an error in the analysis."
+
+    def _add_distribution_explanation(
+        self, df: pd.DataFrame, column_types: Dict[str, List[str]]
+    ) -> str:
+        """Add explanation about data distributions"""
+        explanation = "\n\nRegarding distributions in the data: "
+
+        # Only analyze numeric columns for distribution
+        if column_types.get("numeric"):
+            for col in column_types["numeric"][:2]:  # Limit to 2 columns
+                skew = df[col].skew()
+                if abs(skew) < 0.5:
+                    explanation += (
+                        f"The '{col}' column has a fairly symmetric distribution. "
+                    )
+                elif skew > 0:
+                    explanation += (
+                        f"The '{col}' column is right-skewed (positively skewed). "
+                    )
+                else:
+                    explanation += (
+                        f"The '{col}' column is left-skewed (negatively skewed). "
+                    )
+
+        return explanation
+
+    def _add_correlation_explanation(
+        self, df: pd.DataFrame, column_types: Dict[str, List[str]]
+    ) -> str:
+        """Add explanation about correlations in the data"""
+        explanation = "\n\nRegarding correlations in the data: "
+
+        # Check if we have enough numeric columns for correlation analysis
+        if column_types.get("numeric") and len(column_types["numeric"]) > 1:
+            corr_matrix = df[column_types["numeric"]].corr()
+
+            # Find strongest correlation (excluding self-correlations)
+            strongest_corr = 0
+            col1, col2 = "", ""
+
+            for i, c1 in enumerate(corr_matrix.columns):
+                for c2 in corr_matrix.columns[i + 1 :]:
+                    if abs(corr_matrix.loc[c1, c2]) > abs(strongest_corr):
+                        strongest_corr = corr_matrix.loc[c1, c2]
+                        col1, col2 = c1, c2
+
+            if col1 and col2:
+                if strongest_corr > 0.7:
+                    explanation += f"There is a strong positive correlation ({strongest_corr:.2f}) between '{col1}' and '{col2}'. "
+                elif strongest_corr > 0.4:
+                    explanation += f"There is a moderate positive correlation ({strongest_corr:.2f}) between '{col1}' and '{col2}'. "
+                elif strongest_corr > 0.1:
+                    explanation += f"There is a weak positive correlation ({strongest_corr:.2f}) between '{col1}' and '{col2}'. "
+                elif strongest_corr < -0.7:
+                    explanation += f"There is a strong negative correlation ({strongest_corr:.2f}) between '{col1}' and '{col2}'. "
+                elif strongest_corr < -0.4:
+                    explanation += f"There is a moderate negative correlation ({strongest_corr:.2f}) between '{col1}' and '{col2}'. "
+                elif strongest_corr < -0.1:
+                    explanation += f"There is a weak negative correlation ({strongest_corr:.2f}) between '{col1}' and '{col2}'. "
+                else:
+                    explanation += f"There are no strong correlations between numeric variables in this dataset. "
+            else:
+                explanation += f"There are not enough numeric columns to perform correlation analysis. "
+        else:
+            explanation += f"There are not enough numeric columns to perform correlation analysis. "
+
+        return explanation
+
+    def _add_trend_explanation(
+        self, df: pd.DataFrame, column_types: Dict[str, List[str]]
+    ) -> str:
+        """Add explanation about trends in the data"""
+        explanation = "\n\nRegarding trends in the data: "
+
+        # Check if we have time columns
+        if column_types.get("time") and column_types.get("numeric"):
+            time_col = column_types["time"][0]
+            numeric_col = column_types["numeric"][0]
+
+            explanation += f"To analyze trends, you can examine how '{numeric_col}' changes over '{time_col}'. "
+            explanation += f"Consider plotting a line chart with '{time_col}' on the x-axis and '{numeric_col}' on the y-axis. "
+        else:
+            explanation += f"No time-related columns were detected, so trend analysis may not be applicable. "
+
+        return explanation
+
+    def generate_auto_visualizations(self, file_id: str) -> List[Dict[str, Any]]:
+        """
+        Generate automatic visualizations for a dataset.
+
+        Args:
+            file_id: ID of preprocessed dataset
+
+        Returns:
+            List of dictionaries with visualization data
+        """
+        try:
+            if file_id not in self.preprocessed_data:
+                return [{"error": f"Dataset with ID {file_id} not found"}]
+
+            data_info = self.preprocessed_data[file_id]
+            df = data_info["df"]
+            column_types = data_info["column_types"]
+
+            visualizations = []
+
+            # Generate distribution plots for numeric columns (up to 2)
+            for i, col in enumerate(column_types.get("numeric", [])[:2]):
+                try:
+                    plt.figure(figsize=(8, 6))
+                    sns.histplot(df[col], kde=True)
+                    plt.title(f"Distribution of {col}")
+                    plt.tight_layout()
+
+                    # Convert plot to base64 image
+                    buffer = BytesIO()
+                    plt.savefig(buffer, format="png")
+                    buffer.seek(0)
+                    image_data = base64.b64encode(buffer.read()).decode("utf-8")
+                    buffer.close()
+                    plt.close()
+
+                    visualizations.append(
+                        {
+                            "type": "histogram",
+                            "title": f"Distribution of {col}",
+                            "image": image_data,
+                        }
+                    )
+                except Exception as e:
+                    logging.error(f"Error generating histogram for {col}: {str(e)}")
+
+            # Generate bar charts for categorical columns (up to 2)
+            for i, col in enumerate(column_types.get("categorical", [])[:2]):
+                try:
+                    # Only create charts for columns with reasonable number of categories
+                    if df[col].nunique() <= 10:
+                        plt.figure(figsize=(8, 6))
+                        value_counts = df[col].value_counts().head(10)
+                        sns.barplot(x=value_counts.index, y=value_counts.values)
+                        plt.xticks(rotation=45)
+                        plt.title(f"Counts by {col}")
+                        plt.tight_layout()
+
+                        # Convert plot to base64 image
+                        buffer = BytesIO()
+                        plt.savefig(buffer, format="png")
+                        buffer.seek(0)
+                        image_data = base64.b64encode(buffer.read()).decode("utf-8")
+                        buffer.close()
+                        plt.close()
+
+                        visualizations.append(
+                            {
+                                "type": "bar",
+                                "title": f"Counts by {col}",
+                                "image": image_data,
+                            }
+                        )
+                except Exception as e:
+                    logging.error(f"Error generating bar chart for {col}: {str(e)}")
+
+            # Generate scatter plot if we have at least 2 numeric columns
+            if len(column_types.get("numeric", [])) >= 2:
+                try:
+                    col1 = column_types["numeric"][0]
+                    col2 = column_types["numeric"][1]
+
+                    plt.figure(figsize=(8, 6))
+                    sns.scatterplot(data=df, x=col1, y=col2)
+                    plt.title(f"Relationship between {col1} and {col2}")
+                    plt.tight_layout()
+
+                    # Convert plot to base64 image
+                    buffer = BytesIO()
+                    plt.savefig(buffer, format="png")
+                    buffer.seek(0)
+                    image_data = base64.b64encode(buffer.read()).decode("utf-8")
+                    buffer.close()
+                    plt.close()
+
+                    visualizations.append(
+                        {
+                            "type": "scatter",
+                            "title": f"Relationship between {col1} and {col2}",
+                            "image": image_data,
+                        }
+                    )
+                except Exception as e:
+                    logging.error(f"Error generating scatter plot: {str(e)}")
+
+            # If we have a date/time column and at least one numeric column
+            if column_types.get("time") and column_types.get("numeric"):
+                try:
+                    time_col = column_types["time"][0]
+                    numeric_col = column_types["numeric"][0]
+
+                    plt.figure(figsize=(10, 6))
+                    plt.plot(df[time_col], df[numeric_col])
+                    plt.title(f"Trend of {numeric_col} over time")
+                    plt.xticks(rotation=45)
+                    plt.tight_layout()
+
+                    # Convert plot to base64 image
+                    buffer = BytesIO()
+                    plt.savefig(buffer, format="png")
+                    buffer.seek(0)
+                    image_data = base64.b64encode(buffer.read()).decode("utf-8")
+                    buffer.close()
+                    plt.close()
+
+                    visualizations.append(
+                        {
+                            "type": "line",
+                            "title": f"Trend of {numeric_col} over time",
+                            "image": image_data,
+                        }
+                    )
+                except Exception as e:
+                    logging.error(f"Error generating time series plot: {str(e)}")
+
+            return visualizations
+        except Exception as e:
+            logging.error(f"Error generating auto visualizations: {str(e)}")
+            return [{"error": str(e)}]

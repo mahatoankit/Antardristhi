@@ -5,7 +5,15 @@ import { analysisApi, messageApi } from '../../api';
 const ChatInput = () => {
   const [inputValue, setInputValue] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
-  const { activeChat, addMessage, dataFile, suggestedQuestions, setLoading, setCurrentAnalysisResults } = useChat();
+  const { 
+    activeChat, 
+    addMessage, 
+    dataFile, 
+    suggestedQuestions, 
+    setLoading, 
+    setCurrentAnalysisResults,
+    setCurrentQuery // Add the new function
+  } = useChat();
   const textareaRef = useRef(null);
   
   // Adjust textarea height based on content
@@ -44,6 +52,9 @@ const ChatInput = () => {
     
     // Store the message value before clearing the input
     const messageContent = inputValue;
+    
+    // Save the current query before clearing the input
+    setCurrentQuery(messageContent);
     
     // Clear input and start loading immediately
     addMessage(userMessage); // Add the user message to chat

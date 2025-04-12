@@ -13,7 +13,7 @@ import {
 } from 'recharts';
 
 const MessageList = () => {
-  const { messages, loading } = useChat();
+  const { messages, loading, lastQuery, analysisResults } = useChat();
   const messagesEndRef = useRef(null);
 
   // Automatically scroll to the latest message
@@ -23,6 +23,26 @@ const MessageList = () => {
 
   // Render the content of a message based on its type
   const renderMessageContent = (message) => {
+    const { type, content, role } = message;
+    
+    // For assistant messages that contain analysis results, show the query that generated them
+    if (role === 'assistant' && analysisResults && lastQuery && 
+        (message.content === analysisResults.text || message.content === analysisResults.explanation)) {
+      return (
+        <div>
+          <div className="mb-2 text-xs text-gray-500 italic border-b border-gray-200 pb-1">
+            In response to: "{lastQuery}"
+          </div>
+          {renderRegularMessage(message)}
+        </div>
+      );
+    }
+    
+    return renderRegularMessage(message);
+  };
+  
+  // Render regular message content
+  const renderRegularMessage = (message) => {
     const { type, content } = message;
 
     if (type === 'error') {
@@ -30,6 +50,18 @@ const MessageList = () => {
         <p className="text-sm text-red-500">
           {content || 'An error occurred while processing your request.'}
         </p>
+      );
+    } else if (type === 'chart' && content.chartImage) {
+      // Handle chart messages with image data
+      return (
+        <div className="w-full">
+          <h4 className="text-sm font-semibold mb-2">{content.chartTitle || 'Chart'}</h4>
+          <img 
+            src={`data:image/png;base64,${content.chartImage}`} 
+            alt={content.chartTitle || 'Chart'} 
+            className="max-w-full h-auto rounded-md"
+          />
+        </div>
       );
     } else if (type === 'chart' && content.chartData) {
       return renderChart(content);
@@ -48,9 +80,39 @@ const MessageList = () => {
           {content}
         </ReactMarkdown>
       );
+    } else if (content && typeof content === 'object') {
+      // Handle complex object content
+      if (content.tableData) {
+        return renderTable(content);
+      } else if (content.chartData || content.chartImage) {
+        return renderChart(content);
+      } else if (content.text || content.explanation) {
+        // Handle text/explanation content
+        return (
+          <ReactMarkdown
+            remarkPlugins={[remarkGfm]}
+            components={{
+              p: ({ children }) => (
+                <p className="prose prose-sm max-w-none">{children}</p>
+              ),
+            }}
+          >
+            {content.text || content.explanation}
+          </ReactMarkdown>
+        );
+      } else {
+        // Render any other object as JSON
+        return (
+          <div className="w-full overflow-x-auto">
+            <pre className="text-xs bg-gray-100 p-2 rounded">
+              {JSON.stringify(content, null, 2)}
+            </pre>
+          </div>
+        );
+      }
     } else {
       return (
-        <p className="text-sm text-gray-500 italic">Unsupported message format.</p>
+        <p className="text-sm text-gray-500 italic">Empty or unsupported message format.</p>
       );
     }
   };
