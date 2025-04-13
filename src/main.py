@@ -3,7 +3,7 @@ import streamlit as st
 import pandas as pd
 import json
 from pathlib import Path
-from typing import List, Dict, Any, Tuple  # Added Tuple
+from typing import List, Dict, Any, Tuple, Optional  # Added Tuple
 import numpy as np
 import google.generativeai as genai
 from dotenv import load_dotenv
@@ -17,6 +17,11 @@ from io import StringIO
 import tempfile
 from datetime import datetime, timedelta
 from package_manager.installer import PackageInstaller
+import re
+import json
+import matplotlib
+matplotlib.use('Agg')  # Set the backend to Agg for non-interactive mode
+import matplotlib.pyplot as plt
 
 installer = PackageInstaller()
 
@@ -312,7 +317,33 @@ def generate_natural_language_answer(df: pd.DataFrame, result_df: pd.DataFrame, 
     
     Generate a 2-3 sentence natural language answer that a non-technical person would understand.
     Focus on insights and business value rather than technical details.
-    Keep it simple and conversational."""
+    Keep it simple and conversational.
+    Generate Python code to statistically analyze the relationship between two variables in a Pandas DataFrame named `df`.
+
+Guidelines for code generation:
+
+1. ✅ Use ONLY `pandas` and `matplotlib.pyplot`.
+2. ✅ Check that required columns exist in `df.columns` before using them.
+3. ✅ Drop NaN values from relevant columns before analysis.
+4. ✅ If valid, group the data appropriately and compute a statistical summary (e.g., mean).
+5. ✅ Plot using `matplotlib` with proper labels, `plt.tight_layout()`, and `plt.show()`.
+6. ✅ Optionally calculate and print the Pearson correlation between the two variables.
+7. ❌ Do NOT assume the column names—use only what is passed or checked.
+8. ❌ Do NOT include file reading/writing, markdown explanations, or commentary.
+9. ✅ Return a complete, ready-to-execute code block in Python.
+
+Example request: "Does it seem like having close family relationships helps students get better grades?"
+(Assume this maps to columns `'famrel'` and `'g3'`.)
+
+Expected code output:
+- Clean
+- Executable
+- Self-contained
+- Column-safe
+- Uses `pandas` for computation
+- Uses `matplotlib.pyplot` for visualization
+
+    """
     
     try:
         answer = generate_content_with_gemini(prompt)
@@ -320,47 +351,77 @@ def generate_natural_language_answer(df: pd.DataFrame, result_df: pd.DataFrame, 
     except Exception as e:
         return f"Found {len(result_df)} matching records. {str(e)}"
 
+def execute_analysis_code(df: pd.DataFrame, generated_code: str) -> Optional[plt.Figure]:
+    """
+    Execute generated analysis code and return the matplotlib figure.
+    
+    Args:
+        df: Input DataFrame
+        generated_code: Generated Python code string
+        
+    Returns:
+        Optional[plt.Figure]: Generated plot or None if error occurs
+    """
+    try:
+        # Create a clean namespace with only required imports
+        namespace = {
+            'pd': pd,
+            'plt': plt,
+            'df': df,
+            'np': np
+        }
+        
+        # Execute the code in isolated namespace
+        exec(generated_code, namespace)
+        
+        # Get the current figure from matplotlib
+        fig = plt.gcf()
+        
+        return fig
+    except Exception as e:
+        st.error(f"Error executing analysis code: {str(e)}")
+        return None
+
 def process_question(df: pd.DataFrame, question: str) -> None:
     """Process a question about the data and display results."""
     try:
-        # First try specialized query handlers
-        result_df, explanation, viz_config = handle_sales_query(df, question)
+        # Generate answer and code
+        answer = generate_natural_language_answer(df, df, question)
         
-        # If no specialized handler matched, use general query processing
-        if result_df is None:
-            query_intent = extract_query_intent(question)
-            result_df, explanation, viz_config = execute_data_query(df, query_intent)
-        
-        # Generate natural language answer
-        answer = generate_natural_language_answer(df, result_df, question)
-        
-        # Display results
+        # Display the natural language answer
         st.write("💡 **Answer:**", answer)
         
-        if len(result_df) > 0:
-            with st.expander("View Detailed Results"):
-                st.write("📊 **Data:**")
-                st.dataframe(result_df)
-                st.write("🔍 **Technical Details:**", explanation)
+        # Extract code block from the answer
+        code_match = re.search(r'```python(.*?)```', answer, re.DOTALL)
+        
+        if code_match:
+            analysis_code = code_match.group(1).strip()
             
-            # Generate and display visualization if applicable
-            if viz_config:
-                st.write("📈 **Visualization:**")
-                code = generate_visualization_code(viz_config, result_df)
-                fig = execute_viz_code(code, result_df)
-                if fig:
-                    st.plotly_chart(fig, use_container_width=True)
-            
-            # Generate additional insights if there are enough rows
-            if len(result_df) > 1:
-                insight_prompt = f"""Given this result of {len(result_df)} rows with columns {', '.join(result_df.columns)},
-                provide 2-3 key insights about the data in bullet points. Keep it simple and non-technical."""
-                insights = generate_content_with_gemini(insight_prompt)
-                with st.expander("Additional Insights"):
-                    st.write(insights)
-        else:
-            st.warning("No results found matching your query.")
-            
+            # Execute the code and display plot
+            with st.spinner('Generating visualization...'):
+                # Clear any existing plots
+                plt.clf()
+                
+                # Create namespace with required imports
+                namespace = {
+                    'pd': pd,
+                    'plt': plt,
+                    'df': df,
+                    'np': np
+                }
+                
+                # Execute the code in isolated namespace
+                exec(analysis_code, namespace)
+                
+                # Ensure proper layout
+                plt.tight_layout()
+                
+                # Display the plot
+                st.pyplot(plt.gcf())
+                
+                # Clean up
+                plt.close()
+                
     except Exception as e:
         st.error(f"Error processing question: {str(e)}")
         st.write("I apologize, but I couldn't process that question. Could you rephrase it?")
@@ -514,6 +575,7 @@ def suggest_visualizations(df: pd.DataFrame) -> List[Dict]:
     except Exception as e:
         st.error(f"Error generating visualization suggestions: {str(e)}")
         return generate_fallback_visualizations(df)
+
 
 def generate_visualization_code(viz_config: Dict, df: pd.DataFrame) -> str:
     """Generate Python code for the visualization based on configuration."""
@@ -690,6 +752,334 @@ def execute_viz_code(code: str, df: pd.DataFrame) -> go.Figure:
         st.error(f"Error executing visualization code: {str(e)}")
         return None
 
+import pandas as pd
+import matplotlib.pyplot as plt
+from typing import List, Dict, Optional, Tuple
+
+def validate_columns(df: pd.DataFrame, required_columns: List[str]) -> bool:
+    """
+    Validate if required columns exist in the DataFrame.
+    
+    Args:
+        df: Input DataFrame
+        required_columns: List of column names to validate
+        
+    Returns:
+        bool: True if all columns exist, False otherwise
+    """
+    valid_columns = df.columns.tolist()
+    missing_columns = [col for col in required_columns if col not in valid_columns]
+    
+    if missing_columns:
+        print(f"Missing required columns: {', '.join(missing_columns)}")
+        return False
+    return True
+
+def plot_distribution(df: pd.DataFrame, column: str) -> Optional[plt.Figure]:
+    """
+    Create histogram for numeric column distribution.
+    
+    Args:
+        df: Input DataFrame
+        column: Column name to plot
+        
+    Returns:
+        matplotlib.Figure or None if error occurs
+    """
+    if not validate_columns(df, [column]):
+        return None
+        
+    try:
+        plt.figure(figsize=(10, 6))
+        df[column].dropna().hist(bins=30)
+        plt.title(f'Distribution of {column}')
+        plt.xlabel(column)
+        plt.ylabel('Frequency')
+        plt.tight_layout()
+        return plt.gcf()
+    except Exception as e:
+        print(f"Error plotting distribution: {str(e)}")
+        return None
+
+def plot_time_series(df: pd.DataFrame, time_column: str, value_column: str) -> Optional[plt.Figure]:
+    """
+    Create line plot for time series data.
+    
+    Args:
+        df: Input DataFrame
+        time_column: Column containing time data
+        value_column: Column containing values to plot
+        
+    Returns:
+        matplotlib.Figure or None if error occurs
+    """
+    if not validate_columns(df, [time_column, value_column]):
+        return None
+        
+    try:
+        # Ensure data is sorted by time
+        plot_df = df.sort_values(time_column).dropna(subset=[time_column, value_column])
+        
+        plt.figure(figsize=(12, 6))
+        plt.plot(plot_df[time_column], plot_df[value_column])
+        plt.title(f'{value_column} Over Time')
+        plt.xlabel(time_column)
+        plt.ylabel(value_column)
+        plt.xticks(rotation=45)
+        plt.tight_layout()
+        return plt.gcf()
+    except Exception as e:
+        print(f"Error plotting time series: {str(e)}")
+        return None
+
+def plot_bar_comparison(df: pd.DataFrame, category_column: str, value_column: str) -> Optional[plt.Figure]:
+    """
+    Create bar plot comparing values across categories.
+    
+    Args:
+        df: Input DataFrame
+        category_column: Column containing categories
+        value_column: Column containing values to compare
+        
+    Returns:
+        matplotlib.Figure or None if error occurs
+    """
+    if not validate_columns(df, [category_column, value_column]):
+        return None
+        
+    try:
+        # Group and aggregate data
+        agg_df = df.groupby(category_column)[value_column].mean().dropna()
+        
+        plt.figure(figsize=(10, 6))
+        agg_df.plot(kind='bar')
+        plt.title(f'Average {value_column} by {category_column}')
+        plt.xlabel(category_column)
+        plt.ylabel(f'Average {value_column}')
+        plt.xticks(rotation=45)
+        plt.tight_layout()
+        return plt.gcf()
+    except Exception as e:
+        print(f"Error plotting bar comparison: {str(e)}")
+        return None
+
+def plot_scatter_correlation(df: pd.DataFrame, x_column: str, y_column: str) -> Optional[plt.Figure]:
+    """
+    Create scatter plot showing correlation between two numeric columns.
+    
+    Args:
+        df: Input DataFrame
+        x_column: Column for x-axis
+        y_column: Column for y-axis
+        
+    Returns:
+        matplotlib.Figure or None if error occurs
+    """
+    if not validate_columns(df, [x_column, y_column]):
+        return None
+        
+    try:
+        # Remove rows with missing values
+        plot_df = df.dropna(subset=[x_column, y_column])
+        
+        plt.figure(figsize=(10, 6))
+        plt.scatter(plot_df[x_column], plot_df[y_column], alpha=0.5)
+        plt.title(f'Correlation: {x_column} vs {y_column}')
+        plt.xlabel(x_column)
+        plt.ylabel(y_column)
+        plt.tight_layout()
+        return plt.gcf()
+    except Exception as e:
+        print(f"Error plotting scatter correlation: {str(e)}")
+        return None
+
+def generate_visualization(df: pd.DataFrame, viz_config: Dict) -> Optional[plt.Figure]:
+    """
+    Generate visualization based on configuration.
+    
+    Args:
+        df: Input DataFrame
+        viz_config: Dictionary containing visualization parameters
+        
+    Returns:
+        matplotlib.Figure or None if error occurs
+    """
+    try:
+        plot_type = viz_config['plot_type'].lower()
+        columns = viz_config['columns']
+        
+        if not validate_columns(df, columns):
+            return None
+            
+        if plot_type == 'histogram':
+            return plot_distribution(df, columns[0])
+        elif plot_type == 'line':
+            return plot_time_series(df, columns[0], columns[1])
+        elif plot_type == 'bar':
+            return plot_bar_comparison(df, columns[0], columns[1])
+        elif plot_type == 'scatter':
+            return plot_scatter_correlation(df, columns[0], columns[1])
+        else:
+            print(f"Unsupported plot type: {plot_type}")
+            return None
+            
+    except Exception as e:
+        print(f"Error generating visualization: {str(e)}")
+        return None
+
+def generate_generic_visualizations(df: pd.DataFrame) -> List[Dict]:
+    """
+    Generate visualization suggestions based on data types.
+    """
+    visualizations = []
+    
+    try:
+        # Convert columns to string type to avoid dtype issues
+        df = df.copy()
+        
+        # Detect column types using numpy/pandas dtypes
+        numeric_cols = df.select_dtypes([np.number]).columns.tolist()
+        categorical_cols = df.select_dtypes(['object', 'category']).columns.tolist()
+        datetime_cols = df.select_dtypes(['datetime64[ns]', 'datetime64']).columns.tolist()
+        
+        # 1. Numeric Distributions
+        for col in numeric_cols[:2]:  # First 2 numeric columns
+            visualizations.append({
+                'title': f'Distribution of {col}',
+                'plot_type': 'histogram',
+                'columns': [col],
+                'explanation': f'Shows how {col} values are distributed'
+            })
+        
+        # 2. Category Counts
+        for col in categorical_cols[:2]:  # First 2 categorical columns
+            if df[col].nunique() < len(df) // 2:  # Only if reasonable number of categories
+                visualizations.append({
+                    'title': f'Top Categories in {col}',
+                    'plot_type': 'bar',
+                    'columns': [col],
+                    'explanation': f'Shows the most common values in {col}'
+                })
+        
+        # 3. Time Series (if date columns exist)
+        if datetime_cols and numeric_cols:
+            visualizations.append({
+                'title': f'{numeric_cols[0]} Over Time',
+                'plot_type': 'line',
+                'columns': [datetime_cols[0], numeric_cols[0]],
+                'explanation': f'Shows how {numeric_cols[0]} changes over time'
+            })
+        
+        # 4. Correlations between numeric columns
+        if len(numeric_cols) >= 2:
+            visualizations.append({
+                'title': f'Correlation: {numeric_cols[0]} vs {numeric_cols[1]}',
+                'plot_type': 'scatter',
+                'columns': [numeric_cols[0], numeric_cols[1]],
+                'explanation': f'Shows relationship between {numeric_cols[0]} and {numeric_cols[1]}'
+            })
+            
+        if not visualizations and len(df.columns) > 0:
+            col = df.columns[0]
+            visualizations.append({
+                'title': f'Summary of {col}',
+                'plot_type': 'histogram',
+                'columns': [col],
+                'explanation': f'Basic analysis of {col}'
+            })
+            
+    except Exception as e:
+        st.error(f"Error generating visualization suggestions: {str(e)}")
+        # Provide a simple fallback
+        if len(df.columns) > 0:
+            visualizations.append({
+                'title': f'Summary of {df.columns[0]}',
+                'plot_type': 'histogram',
+                'columns': [df.columns[0]],
+                'explanation': 'Basic data analysis'
+            })
+    
+    return visualizations
+def plot_generic_visualization(df: pd.DataFrame, viz_config: Dict) -> Optional[plt.Figure]:
+    """
+    Create a generic visualization based on configuration.
+    
+    Args:
+        df: Input DataFrame
+        viz_config: Dictionary containing visualization configuration
+        
+    Returns:
+        Optional[plt.Figure]: Generated matplotlib figure or None if error occurs
+    """
+    try:
+        # Clear any existing plots
+        plt.close('all')
+        
+        # Create new figure
+        fig, ax = plt.subplots(figsize=(10, 6))
+        
+        plot_type = viz_config['plot_type'].lower()
+        columns = viz_config['columns']
+        title = viz_config['title']
+        
+        # Clean and prepare data
+        plot_df = df[columns].copy()
+        plot_df = plot_df.dropna()
+        
+        if len(plot_df) == 0:
+            st.warning("No valid data to plot after cleaning")
+            return None
+        
+        if plot_type == 'histogram':
+            if pd.api.types.is_numeric_dtype(plot_df[columns[0]]):
+                ax.hist(plot_df[columns[0]], bins=30, edgecolor='black')
+                ax.set_xlabel(columns[0])
+                ax.set_ylabel('Frequency')
+            else:
+                # Fall back to bar plot for categorical data
+                value_counts = plot_df[columns[0]].value_counts()[:10]
+                value_counts.plot(kind='bar', ax=ax)
+                ax.set_xlabel(columns[0])
+                ax.set_ylabel('Count')
+                
+        elif plot_type == 'bar':
+            value_counts = plot_df[columns[0]].value_counts()[:10]
+            value_counts.plot(kind='bar', ax=ax)
+            ax.set_xlabel(columns[0])
+            ax.set_ylabel('Count')
+            
+        elif plot_type == 'line':
+            if pd.api.types.is_datetime64_any_dtype(plot_df[columns[0]]):
+                plot_df = plot_df.sort_values(columns[0])
+            ax.plot(plot_df[columns[0]], plot_df[columns[1]])
+            ax.set_xlabel(columns[0])
+            ax.set_ylabel(columns[1])
+            plt.xticks(rotation=45)
+            
+        elif plot_type == 'scatter':
+            if all(pd.api.types.is_numeric_dtype(plot_df[col]) for col in columns):
+                ax.scatter(plot_df[columns[0]], plot_df[columns[1]], alpha=0.5)
+                ax.set_xlabel(columns[0])
+                ax.set_ylabel(columns[1])
+                
+                # Add correlation coefficient
+                corr = plot_df[columns[0]].corr(plot_df[columns[1]])
+                ax.text(0.05, 0.95, f'Correlation: {corr:.2f}', 
+                       transform=ax.transAxes, 
+                       bbox=dict(facecolor='white', alpha=0.8))
+            else:
+                st.warning("Scatter plot requires numeric columns")
+                return None
+        
+        ax.set_title(title)
+        plt.tight_layout()
+        
+        return fig
+        
+    except Exception as e:
+        st.error(f"Error creating visualization: {str(e)}")
+        return None
+    
 def main():
     st.title("🤖 Interactive Data Analytics Assistant")
     st.write("Upload your data file and start analyzing it instantly!")
@@ -746,19 +1136,20 @@ def main():
             
             # Generate and display suggested visualizations
             st.subheader("📊 Recommended Visualizations")
-            if 'viz_suggestions' not in st.session_state:
-                st.session_state['viz_suggestions'] = suggest_visualizations(df)
-            
-            # Display visualization suggestions as expandable sections
-            for i, viz in enumerate(st.session_state['viz_suggestions'], 1):
-                with st.expander(f"📈 {viz['title']}", expanded=i==1):
-                    st.write(f"**Insight**: {viz['explanation']}")
-                    if st.button(f"Generate Visualization {i}", key=f"viz_{i}"):
-                        with st.spinner('Generating visualization...'):
-                            code = generate_visualization_code(viz, df)
-                            fig = execute_viz_code(code, df)
-                            if fig:
-                                st.plotly_chart(fig, use_container_width=True)
+            visualizations = generate_generic_visualizations(df)
+
+            if visualizations:
+                for i, viz in enumerate(visualizations, 1):
+                    with st.expander(f"📈 {viz['title']}", expanded=i==1):
+                        st.write(f"**Insight**: {viz['explanation']}")
+                        if st.button(f"Generate Visualization {i}", key=f"viz_{i}"):
+                            with st.spinner('Generating visualization...'):
+                                fig = plot_generic_visualization(df, viz)
+                                if fig:
+                                    st.pyplot(fig)
+                                    plt.close(fig)  # Properly close the figure
+            else:
+                st.info("No automatic visualizations could be generated for this dataset")
             
             # Generate and display suggested questions
             st.subheader("❓ Suggested Questions")
@@ -772,7 +1163,7 @@ def main():
                         process_question(df, question)
             
             # Custom question input
-            st.subheader("🔍 Ask Your Own Question")
+            st.subheader("Ask Your Own Question")
             custom_question = st.text_input("What would you like to know about your data?")
             
             if custom_question:
