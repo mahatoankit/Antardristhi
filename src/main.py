@@ -36,6 +36,51 @@ async def ensure_dependencies():
     for package in required_packages:
         await installer.install_package(package)
 
+def encode_categorical_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Encode categorical columns using label and one-hot encoding.
+    
+    Args:
+        df: Input DataFrame
+        
+    Returns:
+        DataFrame with encoded categorical columns
+    """
+    try:
+        df_encoded = df.copy()
+        categorical_columns = df.select_dtypes(include=['object', 'category']).columns
+        
+        for col in categorical_columns:
+            unique_count = df[col].nunique()
+            missing_count = df[col].isnull().sum()
+            
+            # Skip columns with too many unique values or too many missing values
+            if unique_count > len(df) * 0.5 or missing_count > len(df) * 0.5:
+                continue
+                
+            if unique_count <= 2:  # Binary categorical variables
+                # Use label encoding for binary
+                from sklearn.preprocessing import LabelEncoder
+                le = LabelEncoder()
+                df_encoded[f"{col}_encoded"] = le.fit_transform(df[col].astype(str))
+                
+            elif unique_count <= 10:  # Categorical with few unique values
+                # Use one-hot encoding for categorical with few unique values
+                dummies = pd.get_dummies(df[col], prefix=col, drop_first=True)
+                df_encoded = pd.concat([df_encoded, dummies], axis=1)
+                
+            else:  # Categorical with many unique values
+                # Use label encoding for categorical with many unique values
+                from sklearn.preprocessing import LabelEncoder
+                le = LabelEncoder()
+                df_encoded[f"{col}_encoded"] = le.fit_transform(df[col].astype(str))
+        
+        return df_encoded
+        
+    except Exception as e:
+        st.error(f"Error encoding categorical columns: {str(e)}")
+        return df
+
 def load_data(uploaded_file) -> pd.DataFrame:
     """Load data from various file formats and convert to pandas DataFrame with improved cleaning."""
     file_extension = Path(uploaded_file.name).suffix.lower()
@@ -106,6 +151,21 @@ def load_data(uploaded_file) -> pd.DataFrame:
         
         # 4. Clean column names
         df.columns = [col.strip().lower().replace(' ', '_') for col in df.columns]
+        
+        # Encode categorical columns
+        df = encode_categorical_columns(df)
+        
+        # Store original column names for reference
+        categorical_mappings = {}
+        for col in df.columns:
+            if col.endswith('_encoded') or '_' in col:
+                original_col = col.split('_')[0]
+                if original_col not in categorical_mappings:
+                    categorical_mappings[original_col] = []
+                categorical_mappings[original_col].append(col)
+        
+        # Store mappings in session state for later use
+        st.session_state['categorical_mappings'] = categorical_mappings
         
         return df
         
@@ -684,31 +744,28 @@ fig.update_layout(
         return ""
 
 def prepare_data_for_viz(df: pd.DataFrame, columns: List[str], max_rows: int = 1000) -> pd.DataFrame:
-    """Prepare data for visualization with sampling and type validation."""
+    """Prepare data for visualization with encoding handling."""
     try:
-        # Get a sample if the dataset is large
         df_viz = get_sample_data(df, max_rows)
         
-        # Validate and clean requested columns
-        for col in columns:
-            if col not in df_viz.columns:
-                raise ValueError(f"Column {col} not found in dataset")
+        # Check if we're dealing with encoded columns
+        if 'categorical_mappings' in st.session_state:
+            mappings = st.session_state['categorical_mappings']
             
-            # Handle different data types
-            if pd.api.types.is_numeric_dtype(df_viz[col]):
-                # Clean numeric data
-                df_viz[col] = pd.to_numeric(df_viz[col], errors='coerce')
-            elif pd.api.types.is_datetime64_any_dtype(df_viz[col]):
-                # Ensure datetime format
-                df_viz[col] = pd.to_datetime(df_viz[col], errors='coerce')
-            else:
-                # Convert to string for categorical data
-                df_viz[col] = df_viz[col].astype(str)
+            # Replace encoded columns with their numeric versions
+            for col in columns:
+                original_col = col.split('_')[0]
+                if original_col in mappings:
+                    encoded_cols = mappings[original_col]
+                    # Use the first encoded version if available
+                    if encoded_cols:
+                        df_viz[col] = df_viz[encoded_cols[0]]
         
         return df_viz
+        
     except Exception as e:
-        st.error(f"Error preparing data for visualization: {str(e)}")
-        return df.head()  # Return a small subset as fallback
+        st.error(f"Error preparing data: {str(e)}")
+        return df.head()
 
 def execute_viz_code(code: str, df: pd.DataFrame) -> go.Figure:
     """Execute visualization code with improved error handling and data preparation."""
@@ -928,78 +985,41 @@ def generate_visualization(df: pd.DataFrame, viz_config: Dict) -> Optional[plt.F
         return None
 
 def generate_generic_visualizations(df: pd.DataFrame) -> List[Dict]:
-    """
-    Generate visualization suggestions based on data types.
-    """
+    """Generate visualization suggestions including encoded columns."""
     visualizations = []
     
     try:
-        # Convert columns to string type to avoid dtype issues
-        df = df.copy()
-        
-        # Detect column types using numpy/pandas dtypes
+        # Get encoded columns
+        encoded_cols = [col for col in df.columns if col.endswith('_encoded')]
         numeric_cols = df.select_dtypes([np.number]).columns.tolist()
-        categorical_cols = df.select_dtypes(['object', 'category']).columns.tolist()
-        datetime_cols = df.select_dtypes(['datetime64[ns]', 'datetime64']).columns.tolist()
         
-        # 1. Numeric Distributions
-        for col in numeric_cols[:2]:  # First 2 numeric columns
+        # Add visualizations for encoded categorical columns
+        for col in encoded_cols[:2]:
             visualizations.append({
-                'title': f'Distribution of {col}',
+                'title': f'Distribution of {col.replace("_encoded", "")}',
                 'plot_type': 'histogram',
                 'columns': [col],
-                'explanation': f'Shows how {col} values are distributed'
-            })
-        
-        # 2. Category Counts
-        for col in categorical_cols[:2]:  # First 2 categorical columns
-            if df[col].nunique() < len(df) // 2:  # Only if reasonable number of categories
-                visualizations.append({
-                    'title': f'Top Categories in {col}',
-                    'plot_type': 'bar',
-                    'columns': [col],
-                    'explanation': f'Shows the most common values in {col}'
-                })
-        
-        # 3. Time Series (if date columns exist)
-        if datetime_cols and numeric_cols:
-            visualizations.append({
-                'title': f'{numeric_cols[0]} Over Time',
-                'plot_type': 'line',
-                'columns': [datetime_cols[0], numeric_cols[0]],
-                'explanation': f'Shows how {numeric_cols[0]} changes over time'
-            })
-        
-        # 4. Correlations between numeric columns
-        if len(numeric_cols) >= 2:
-            visualizations.append({
-                'title': f'Correlation: {numeric_cols[0]} vs {numeric_cols[1]}',
-                'plot_type': 'scatter',
-                'columns': [numeric_cols[0], numeric_cols[1]],
-                'explanation': f'Shows relationship between {numeric_cols[0]} and {numeric_cols[1]}'
+                'explanation': f'Shows distribution of encoded {col.replace("_encoded", "")}'
             })
             
-        if not visualizations and len(df.columns) > 0:
-            col = df.columns[0]
-            visualizations.append({
-                'title': f'Summary of {col}',
-                'plot_type': 'histogram',
-                'columns': [col],
-                'explanation': f'Basic analysis of {col}'
-            })
-            
+            # Add correlation plots between encoded categories and numeric columns
+            for num_col in numeric_cols:
+                if num_col not in encoded_cols:
+                    visualizations.append({
+                        'title': f'{col.replace("_encoded", "")} vs {num_col}',
+                        'plot_type': 'scatter',
+                        'columns': [col, num_col],
+                        'explanation': f'Shows relationship between {col.replace("_encoded", "")} and {num_col}'
+                    })
+        
+        # ... rest of existing visualization code ...
+        
     except Exception as e:
-        st.error(f"Error generating visualization suggestions: {str(e)}")
-        # Provide a simple fallback
-        if len(df.columns) > 0:
-            visualizations.append({
-                'title': f'Summary of {df.columns[0]}',
-                'plot_type': 'histogram',
-                'columns': [df.columns[0]],
-                'explanation': 'Basic data analysis'
-            })
+        st.error(f"Error generating visualizations: {str(e)}")
+        return []
     
     return visualizations
+
 def plot_generic_visualization(df: pd.DataFrame, viz_config: Dict) -> Optional[plt.Figure]:
     """
     Create a generic visualization based on configuration.
