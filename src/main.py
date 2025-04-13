@@ -445,43 +445,57 @@ def execute_analysis_code(df: pd.DataFrame, generated_code: str) -> Optional[plt
 def process_question(df: pd.DataFrame, question: str) -> None:
     """Process a question about the data and display results."""
     try:
-        # Generate answer and code
-        answer = generate_natural_language_answer(df, df, question)
-        
-        # Display the natural language answer
-        st.write("**Answer:**", answer)
-        
-        # Extract code block from the answer
-        code_match = re.search(r'```python(.*?)```', answer, re.DOTALL)
-        
-        if code_match:
-            analysis_code = code_match.group(1).strip()
-            
-            # Execute the code and display plot
-            with st.spinner('Generating visualization...'):
-                # Clear any existing plots
-                plt.clf()
-                
-                # Create namespace with required imports
-                namespace = {
-                    'pd': pd,
-                    'plt': plt,
-                    'df': df,
-                    'np': np
-                }
-                
-                # Execute the code in isolated namespace
-                exec(analysis_code, namespace)
-                
-                # Ensure proper layout
-                plt.tight_layout()
-                
-                # Display the plot
-                st.pyplot(plt.gcf())
-                
-                # Clean up
-                plt.close()
-                
+        # Use session_state flags to ensure one-time execution per question
+        if st.session_state.get("last_executed_question") != question:
+            st.session_state["last_executed_question"] = question
+            st.session_state["exec_ran"] = False
+
+        # Only run if not already executed for this question
+        if not st.session_state.get("exec_ran", False):
+            st.session_state["exec_ran"] = True
+
+            # Generate answer and code
+            answer = generate_natural_language_answer(df, df, question)
+
+            # Clean the answer to remove embedded code blocks
+            answer_text = re.sub(r'```python.*?```', '', answer, flags=re.DOTALL).strip()
+            st.write("💡 **Answer:**", answer_text)
+
+            # Terminal print with flush=True
+            print("Running generated analysis code...", flush=True)
+
+            # Extract code block from the answer
+            code_match = re.search(r'```python(.*?)```', answer, re.DOTALL)
+            if code_match:
+                analysis_code = code_match.group(1).strip()
+
+                # Execute the code and display plot
+                with st.spinner('Generating visualization...'):
+                    plt.clf()  # Clear any existing plots
+
+                    # Create namespace with required imports
+                    namespace = {
+                        'pd': pd,
+                        'plt': plt,
+                        'df': df,
+                        'np': np,
+                        # Patch plt.show to be a no-op so that st.pyplot() can display the figure
+                        'show': lambda: None
+                    }
+                    # Remove any plt.show() from generated code
+                    analysis_code = analysis_code.replace("plt.show()", "")
+                    exec(analysis_code, namespace)
+
+                    plt.tight_layout()
+                    st.pyplot(plt.gcf())
+
+                    # Clean up
+                    plt.close()
+
+                # Show the code only inside an expander for a clean UI
+                with st.expander("👩‍💻 View Code", expanded=False):
+                    st.code(analysis_code, language='python')
+
     except Exception as e:
         st.error(f"Error processing question: {str(e)}")
         st.write("I apologize, but I couldn't process that question. Could you rephrase it?")
@@ -1200,11 +1214,15 @@ def main():
             # Display numeric summary if available
             if analysis['numeric_summary']:
                 st.subheader("📈 Numeric Column Statistics")
+                numeric_stats = []
                 for col, stats in analysis['numeric_summary'].items():
-                    st.write(f"**{col}**")
-                    st.write(f"Mean: {stats['mean']:.2f}")
-                    st.write(f"Median: {stats['median']:.2f}")
-                    st.write(f"Range: {stats['min']:.2f} to {stats['max']:.2f}")
+                    numeric_stats.append({
+                        "Column": col,
+                        "Mean": f"{stats['mean']:.2f}",
+                        "Median": f"{stats['median']:.2f}",
+                        "Range": f"{stats['min']:.2f} to {stats['max']:.2f}"
+                    })
+                st.table(numeric_stats)
             
             # Generate and display suggested visualizations
             st.subheader("📊 Recommended Visualizations")
