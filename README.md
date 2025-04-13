@@ -1,4 +1,4 @@
-# DataChat: Interactive Data Analytics Assistant
+# Antardristhi: Interactive Data Analytics Assistant
 
 An intelligent data analysis tool that helps non-technical users explore and understand their data through natural language conversations.
 
