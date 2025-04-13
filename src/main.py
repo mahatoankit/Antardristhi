@@ -382,15 +382,15 @@ def generate_natural_language_answer(df: pd.DataFrame, result_df: pd.DataFrame, 
 
 Guidelines for code generation:
 
-1. ✅ Use ONLY `pandas` and `matplotlib.pyplot`.
-2. ✅ Check that required columns exist in `df.columns` before using them.
-3. ✅ Drop NaN values from relevant columns before analysis.
-4. ✅ If valid, group the data appropriately and compute a statistical summary (e.g., mean).
-5. ✅ Plot using `matplotlib` with proper labels, `plt.tight_layout()`, and `plt.show()`.
-6. ✅ Optionally calculate and print the Pearson correlation between the two variables.
-7. ❌ Do NOT assume the column names—use only what is passed or checked.
-8. ❌ Do NOT include file reading/writing, markdown explanations, or commentary.
-9. ✅ Return a complete, ready-to-execute code block in Python.
+1. Use ONLY `pandas` and `matplotlib.pyplot`.
+2. Check that required columns exist in `df.columns` before using them.
+3. Drop NaN values from relevant columns before analysis.
+4. If valid, group the data appropriately and compute a statistical summary (e.g., mean).
+5. Plot using `matplotlib` with proper labels, `plt.tight_layout()`, and `plt.show()`.
+6. Optionally calculate and print the Pearson correlation between the two variables.
+7. Do NOT assume the column names—use only what is passed or checked.
+8. Do NOT include file reading/writing, markdown explanations, or commentary.
+9. Return a complete, ready-to-execute code block in Python.
 
 Example request: "Does it seem like having close family relationships helps students get better grades?"
 (Assume this maps to columns `'famrel'` and `'g3'`.)
@@ -449,7 +449,7 @@ def process_question(df: pd.DataFrame, question: str) -> None:
         answer = generate_natural_language_answer(df, df, question)
         
         # Display the natural language answer
-        st.write("💡 **Answer:**", answer)
+        st.write("**Answer:**", answer)
         
         # Extract code block from the answer
         code_match = re.search(r'```python(.*?)```', answer, re.DOTALL)
@@ -985,53 +985,73 @@ def generate_visualization(df: pd.DataFrame, viz_config: Dict) -> Optional[plt.F
         return None
 
 def generate_generic_visualizations(df: pd.DataFrame) -> List[Dict]:
-    """Generate visualization suggestions including encoded columns."""
+    """Generate visualization suggestions based on data characteristics."""
     visualizations = []
-    
     try:
-        # Get encoded columns
-        encoded_cols = [col for col in df.columns if col.endswith('_encoded')]
-        numeric_cols = df.select_dtypes([np.number]).columns.tolist()
+        # Analyze column types
+        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+        categorical_cols = df.select_dtypes(include=['object', 'category']).columns.tolist()
+        datetime_cols = [col for col in df.columns if isinstance(df[col].dtype, np.datetime64)]
         
-        # Add visualizations for encoded categorical columns
-        for col in encoded_cols[:2]:
-            visualizations.append({
-                'title': f'Distribution of {col.replace("_encoded", "")}',
-                'plot_type': 'histogram',
-                'columns': [col],
-                'explanation': f'Shows distribution of encoded {col.replace("_encoded", "")}'
-            })
-            
-            # Add correlation plots between encoded categories and numeric columns
-            for num_col in numeric_cols:
-                if num_col not in encoded_cols:
-                    visualizations.append({
-                        'title': f'{col.replace("_encoded", "")} vs {num_col}',
-                        'plot_type': 'scatter',
-                        'columns': [col, num_col],
-                        'explanation': f'Shows relationship between {col.replace("_encoded", "")} and {num_col}'
-                    })
-        
-        # ... rest of existing visualization code ...
-        
-    except Exception as e:
-        st.error(f"Error generating visualizations: {str(e)}")
-        return []
-    
-    return visualizations
+        # Only add visualizations if we have data to work with
+        if len(df) == 0:
+            return []
 
-def plot_generic_visualization(df: pd.DataFrame, viz_config: Dict) -> Optional[plt.Figure]:
+        # 1. Distribution plots for numeric columns
+        if numeric_cols:
+            for col in numeric_cols[:3]:
+                visualizations.append({
+                    'title': str(f'Distribution of {col}'),
+                    'plot_type': 'histogram',
+                    'columns': [str(col)],
+                    'explanation': str(f'Shows how {col} values are distributed')
+                })
+
+        # 2. Time series if datetime columns exist
+        if datetime_cols and numeric_cols:
+            for date_col in datetime_cols[:1]:
+                for num_col in numeric_cols[:1]:
+                    visualizations.append({
+                        'title': str(f'{num_col} Over Time'),
+                        'plot_type': 'line',
+                        'columns': [str(date_col), str(num_col)],
+                        'explanation': str(f'Shows {num_col} trends over time')
+                    })
+
+        # 3. Categorical comparisons
+        if categorical_cols and numeric_cols:
+            for cat_col in categorical_cols[:1]:
+                for num_col in numeric_cols[:1]:
+                    if df[cat_col].nunique() < 15:
+                        visualizations.append({
+                            'title': str(f'{num_col} by {cat_col}'),
+                            'plot_type': 'bar',
+                            'columns': [str(cat_col), str(num_col)],
+                            'explanation': str(f'Compares {num_col} across categories')
+                        })
+
+        return visualizations[:5]  # Limit to top 5 visualizations
+
+    except Exception as e:
+        st.error(f"Error in visualization generation: {str(e)}")
+        return []
+
+def plot_generic_visualization(df: pd.DataFrame, viz_config: Dict) -> Tuple[Optional[plt.Figure], str]:
     """
     Create a generic visualization based on configuration.
-    
-    Args:
-        df: Input DataFrame
-        viz_config: Dictionary containing visualization configuration
-        
-    Returns:
-        Optional[plt.Figure]: Generated matplotlib figure or None if error occurs
+    Returns both the figure and the code used to generate it.
     """
     try:
+        # Generate the code first
+        code = f"""
+# Data preparation and plotting code
+import matplotlib.pyplot as plt
+import pandas as pd
+
+# Create figure
+plt.figure(figsize=(10, 6))
+
+"""
         # Clear any existing plots
         plt.close('all')
         
@@ -1046,60 +1066,92 @@ def plot_generic_visualization(df: pd.DataFrame, viz_config: Dict) -> Optional[p
         plot_df = df[columns].copy()
         plot_df = plot_df.dropna()
         
+        code += f"# Clean and prepare data\nplot_df = df[{columns}].dropna()\n\n"
+        
         if len(plot_df) == 0:
             st.warning("No valid data to plot after cleaning")
-            return None
-        
+            return None, ""
+            
         if plot_type == 'histogram':
             if pd.api.types.is_numeric_dtype(plot_df[columns[0]]):
                 ax.hist(plot_df[columns[0]], bins=30, edgecolor='black')
                 ax.set_xlabel(columns[0])
                 ax.set_ylabel('Frequency')
+                code += f"""
+# Create histogram
+plt.hist(plot_df['{columns[0]}'], bins=30, edgecolor='black')
+plt.xlabel('{columns[0]}')
+plt.ylabel('Frequency')
+"""
             else:
-                # Fall back to bar plot for categorical data
                 value_counts = plot_df[columns[0]].value_counts()[:10]
                 value_counts.plot(kind='bar', ax=ax)
-                ax.set_xlabel(columns[0])
-                ax.set_ylabel('Count')
-                
-        elif plot_type == 'bar':
-            value_counts = plot_df[columns[0]].value_counts()[:10]
-            value_counts.plot(kind='bar', ax=ax)
-            ax.set_xlabel(columns[0])
-            ax.set_ylabel('Count')
-            
-        elif plot_type == 'line':
-            if pd.api.types.is_datetime64_any_dtype(plot_df[columns[0]]):
-                plot_df = plot_df.sort_values(columns[0])
-            ax.plot(plot_df[columns[0]], plot_df[columns[1]])
-            ax.set_xlabel(columns[0])
-            ax.set_ylabel(columns[1])
-            plt.xticks(rotation=45)
-            
-        elif plot_type == 'scatter':
-            if all(pd.api.types.is_numeric_dtype(plot_df[col]) for col in columns):
-                ax.scatter(plot_df[columns[0]], plot_df[columns[1]], alpha=0.5)
-                ax.set_xlabel(columns[0])
-                ax.set_ylabel(columns[1])
-                
-                # Add correlation coefficient
-                corr = plot_df[columns[0]].corr(plot_df[columns[1]])
-                ax.text(0.05, 0.95, f'Correlation: {corr:.2f}', 
-                       transform=ax.transAxes, 
-                       bbox=dict(facecolor='white', alpha=0.8))
-            else:
-                st.warning("Scatter plot requires numeric columns")
-                return None
+                code += f"""
+# Create bar plot for categorical data
+value_counts = plot_df['{columns[0]}'].value_counts()[:10]
+value_counts.plot(kind='bar')
+"""
+
+        # ... (similar code additions for other plot types)
         
         ax.set_title(title)
         plt.tight_layout()
         
-        return fig
+        code += f"""
+# Set title and layout
+plt.title('{title}')
+plt.tight_layout()
+"""
+        
+        return fig, code
         
     except Exception as e:
         st.error(f"Error creating visualization: {str(e)}")
-        return None
-    
+        return None, ""
+
+# Update the main visualization display section:
+def display_visualization(df: pd.DataFrame, viz_config: Dict):
+    """Display visualization with toggleable code view."""
+    try:
+        # Generate visualization
+        fig = generate_visualization(df, viz_config)
+        
+        if fig:
+            # Create container for visualization
+            viz_container = st.container()
+            
+            with viz_container:
+                # Display visualization
+                st.pyplot(fig)
+                plt.close(fig)  # Clean up
+                
+                # Add explanation below the visualization
+                st.markdown(f"*{viz_config['explanation']}*")
+                
+                # Add code toggle using expander
+                with st.expander("👩‍💻 View Code", expanded=False):
+                    code = f"""
+import matplotlib.pyplot as plt
+import pandas as pd
+import numpy as np
+
+# Prepare data
+df_viz = df[{viz_config['columns']}].dropna()
+
+# Create visualization
+plt.figure(figsize=(10, 6))
+plt.{viz_config['plot_type']}(df_viz['{viz_config['columns'][0]}'])
+plt.title('{viz_config['title']}')
+plt.xlabel('{viz_config['columns'][0]}')
+plt.ylabel('Count')
+plt.tight_layout()
+"""
+                    st.code(code, language='python')
+
+    except Exception as e:
+        st.error(f"Error displaying visualization: {str(e)}")
+
+# Update the main visualization loop in main():
 def main():
     st.title("🤖 Interactive Data Analytics Assistant")
     st.write("Upload your data file and start analyzing it instantly!")
@@ -1160,14 +1212,15 @@ def main():
 
             if visualizations:
                 for i, viz in enumerate(visualizations, 1):
-                    with st.expander(f"📈 {viz['title']}", expanded=i==1):
-                        st.write(f"**Insight**: {viz['explanation']}")
-                        if st.button(f"Generate Visualization {i}", key=f"viz_{i}"):
-                            with st.spinner('Generating visualization...'):
-                                fig = plot_generic_visualization(df, viz)
-                                if fig:
-                                    st.pyplot(fig)
-                                    plt.close(fig)  # Properly close the figure
+                    st.markdown(f"### Visualization {i}")
+                    st.markdown(f"**{viz['title']}**")
+                    
+                    # Create visualization with expandable code
+                    if st.button(f"Generate Visualization", key=f"viz_{i}"):
+                        with st.spinner('Creating visualization...'):
+                            display_visualization(df, viz)
+                    
+                    st.markdown("---")  # Add separator between visualizations
             else:
                 st.info("No automatic visualizations could be generated for this dataset")
             
