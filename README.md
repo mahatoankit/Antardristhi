@@ -16,7 +16,7 @@ An intelligent data analysis tool that helps non-technical users explore and und
 1. Clone the repository:
 ```bash
 git clone https://github.com/mahatoankit/Antardristhi.git
-cd DataChat
+cd Antardristhi
 ```
 
 2. Create and activate a virtual environment:
@@ -116,9 +116,12 @@ DataChat/
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-## Contact 📧
+## Team Members/ Contributors 📧
 
-Your Name - [@yourtwitter](https://twitter.com/mahatoankit) - email@example.com
+- [Ankit Mahato](https://www.linkedin.com/in/mahatoankit/)
+- [Nishan Shrestha](https://www.linkedin.com/in/shresthanishan/)
+- [Animesh Maharjan](https://www.linkedin.com/in/animeshmaharjan/)
+- [Ishan Silwal](https://www.linkedin.com/in/ishansilwal)
 
 
 ## Acknowledgments 🙏
